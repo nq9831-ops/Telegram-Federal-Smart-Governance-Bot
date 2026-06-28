@@ -1,0 +1,90 @@
+name: CI
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: tg_federal_bot
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 21 Temurin
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Cache Maven Repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Generate CI application.properties
+        run: |
+          cat > src/main/resources/application.properties << 'EOF'
+          spring.application.name=tg-federal-bot
+          server.port=8080
+          bot.token=CI_TEST_TOKEN
+          bot.username=CI_TEST_BOT
+          bot.creator=123456789
+          spring.datasource.url=jdbc:postgresql://localhost:5432/tg_federal_bot
+          spring.datasource.username=postgres
+          spring.datasource.password=postgres
+          spring.data.redis.host=localhost
+          spring.data.redis.port=6379
+          spring.profiles.active=ci
+          EOF
+
+      # 编译 + SpotBugs 静态审计
+      - name: Build + SpotBugs Security Scan
+        run: >
+          mvn -B clean compile spotbugs:spotbugs spotbugs:check
+          -Dspotbugs.effort=Max
+          -Dspotbugs.threshold=Low
+          -Dspotbugs.failOnError=true
+          -Dspotbugs.excludeFilter=spotbugs-exclude.xml
+          -Dspotbugs.maxRank=20
+
+      - name: Upload SpotBugs Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spotbugs-report
+          path: target/spotbugs*.xml
