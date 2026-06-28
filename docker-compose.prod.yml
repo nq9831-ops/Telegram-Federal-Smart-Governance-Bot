@@ -1,0 +1,117 @@
+# ============================================================
+# TG联邦智能治理机器人 - 生产环境 Docker Compose
+# 安全加固版：
+#   - 无公网端口暴露（仅内部 Docker 网络）
+#   - Elasticsearch 启用安全认证
+#   - 配置文件通过 volume 挂载（不打包进镜像）
+#   - 非 root 运行
+# ============================================================
+# 使用方法：
+#   1. 创建应用配置：
+#      cp src/main/resources/application.properties ./config/application.properties
+#      # 编辑配置填入 Token / 密码
+#
+#   2. 启动：
+#      BOT_TOKEN=xxx BOT_USERNAME=xxx docker compose -f docker-compose.prod.yml up -d
+# ============================================================
+
+services:
+  # ⚠️ 生产环境：使用托管 PostgreSQL（如阿里云 RDS），不推荐容器化部署数据库
+  # 以下仅作为演示用途，生产请替换为外部数据库连接
+  postgres:
+    image: postgres:16-alpine
+    container_name: tgf-postgres
+    environment:
+      POSTGRES_DB: tg_federal_bot
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # ⚠️ 不映射端口到宿主机！仅内部网络访问
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    container_name: tgf-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redispass}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - internal
+
+  elasticsearch:
+    image: elasticsearch:8.15.0
+    container_name: tgf-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=true
+      - xpack.security.authc.api_key.enabled=true
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - ELASTIC_PASSWORD=${ES_PASSWORD:-elasticpass}
+      - network.host=0.0.0.0
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-u", "elastic:${ES_PASSWORD:-elasticpass}", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+    networks:
+      - internal
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tgf-bot
+    # ⚠️ 不暴露端口到宿主机！使用反向代理（Nginx/Caddy）对外暴露
+    # 如需直接访问（开发环境），取消下面注释：
+    # ports:
+    #   - "8080:8080"
+    environment:
+      # Spring 配置通过环境变量覆盖（优先级高于 application.properties）
+      BOT_TOKEN: ${BOT_TOKEN}
+      BOT_USERNAME: ${BOT_USERNAME}
+      BOT_CREATOR: ${BOT_CREATOR:-5006320370}
+      BOT_REVIEWERS: ${BOT_REVIEWERS:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      MODERATION_PROVIDER: ${MODERATION_PROVIDER:-cloud}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/tg_federal_bot
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-postgres}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-redispass}
+      ELASTICSEARCH_URIS: http://elastic:${ES_PASSWORD:-elasticpass}@elasticsearch:9200
+    volumes:
+      # 配置文件通过 volume 挂载（不打包进镜像）
+      - ./config/application.properties:/app/config/application.properties:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - internal
+
+volumes:
+  pgdata:
+  redisdata:
+  esdata:
+
+networks:
+  internal:
+    driver: bridge

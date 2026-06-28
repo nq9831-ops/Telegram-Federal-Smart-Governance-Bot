@@ -1,0 +1,15 @@
+[Unit]
+Description=TG Federal Bot
+After=network.target postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/tg-federal-bot
+ExecStart=/usr/bin/java -jar /opt/tg-federal-bot/tg-federal-bot.jar
+Restart=always
+RestartSec=10
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

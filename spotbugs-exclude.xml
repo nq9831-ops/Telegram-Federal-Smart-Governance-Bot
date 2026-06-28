@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FindBugsFilter>
+    <Match>
+        <Or>
+            <!-- 忽略 CI 中 @Order 注解（SpotBugs 误报） -->
+            <Bug pattern="SE_BAD_FIELD"/>
+            <Bug pattern="SE_BAD_FIELD_STORE"/>
+        </Or>
+    </Match>
+</FindBugsFilter>
