@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FindBugsFilter>
+    <!-- 忽略项目入口类 -->
+    <Match>
+        <Class name="com.tgf.bot.FederalBotApplication"/>
+    </Match>
+
+    <!-- 忽略模型类中的序列化警告 -->
+    <Match>
+        <Package name="~com\.tgf\.bot\.model.*"/>
+        <Bug pattern="SE_NO_SERIALVERSIONID"/>
+    </Match>
+
+    <!-- 忽略配置类中的公开字段 -->
+    <Match>
+        <Package name="~com\.tgf\.bot\.config.*"/>
+        <Bug pattern="URF_UNREAD_PUBLIC_OR_PROTECTED_FIELD"/>
+    </Match>
+
+    <!-- 忽略 Telegram Bot Handler 中的长参数列表 -->
+    <Match>
+        <Package name="~com\.tgf\.bot\.handler.*"/>
+        <Bug pattern="PARAM_NAME"/>
+    </Match>
+</FindBugsFilter>

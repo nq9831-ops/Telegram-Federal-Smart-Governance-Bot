@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TG联邦智能治理</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding-bottom: 80px;
+        }
+        .page { display: none; padding: 16px; max-width: 480px; margin: 0 auto; }
+        .page.active { display: block; }
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 20px 16px;
+            border-radius: 0 0 24px 24px;
+            margin-bottom: 16px;
+            position: sticky; top: 0; z-index: 10;
+        }
+        .header h1 { font-size: 20px; color: #fff; }
+        .header .subtitle { font-size: 12px; color: #888; margin-top: 4px; }
+        .card {
+            background: #1a1a2e;
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 12px;
+            border: 1px solid #2a2a4e;
+        }
+        .card-title { font-size: 14px; color: #888; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 11px; font-weight: 600; }
+        .badge-diamond { background: #00d4aa; color: #000; }
+        .badge-gold { background: #ffd700; color: #000; }
+        .badge-silver { background: #c0c0c0; color: #000; }
+        .badge-bronze { background: #cd7f32; color: #fff; }
+        .badge-restricted { background: #ff4444; color: #fff; }
+        .stars { display: flex; gap: 4px; cursor: pointer; }
+        .stars .star { font-size: 28px; color: #444; transition: 0.2s; }
+        .stars .star.active { color: #ffd700; }
+        .stars .star:hover { transform: scale(1.2); }
+        .rank-item { display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid #2a2a4e; }
+        .rank-item:last-child { border-bottom: none; }
+        .rank-num { width: 28px; font-weight: 700; color: #888; }
+        .rank-1 { color: #ffd700; }
+        .rank-2 { color: #c0c0c0; }
+        .rank-3 { color: #cd7f32; }
+        .search-box { display: flex; gap: 8px; margin-bottom: 12px; }
+        .search-box input {
+            flex: 1; background: #2a2a4e; border: 1px solid #3a3a5e; border-radius: 12px;
+            padding: 10px 14px; color: #fff; font-size: 14px; outline: none;
+        }
+        .search-box input:focus { border-color: #00d4aa; }
+        .search-box button {
+            background: #00d4aa; color: #000; border: none; border-radius: 12px;
+            padding: 0 18px; font-weight: 600; cursor: pointer;
+        }
+        .filter-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+        .filter-row select, .filter-row button {
+            background: #2a2a4e; border: 1px solid #3a3a5e; border-radius: 10px;
+            padding: 6px 12px; color: #e0e0e0; font-size: 12px; cursor: pointer; outline: none;
+        }
+        .filter-row button.active { background: #00d4aa; color: #000; border-color: #00d4aa; }
+        .tab-bar {
+            position: fixed; bottom: 0; left: 0; right: 0; background: #1a1a2e;
+            border-top: 1px solid #2a2a4e; display: flex; justify-content: space-around;
+            padding: 8px 0; padding-bottom: calc(8px + env(safe-area-inset-bottom));
+            z-index: 100; max-width: 480px; margin: 0 auto;
+        }
+        .tab-item { text-align: center; cursor: pointer; padding: 4px 12px; border-radius: 12px; transition: 0.2s; }
+        .tab-item.active { background: #2a2a4e; }
+        .tab-item .icon { font-size: 22px; }
+        .tab-item .label { font-size: 10px; color: #888; margin-top: 2px; }
+        .tab-item.active .label { color: #00d4aa; }
+        .btn {
+            display: inline-block; padding: 10px 24px; border-radius: 12px;
+            font-size: 14px; font-weight: 600; cursor: pointer; border: none;
+        }
+        .btn-primary { background: #00d4aa; color: #000; }
+        .btn-danger { background: #ff4444; color: #fff; }
+        .btn-secondary { background: #2a2a4e; color: #e0e0e0; }
+        .ring-chart { width: 120px; height: 120px; margin: 0 auto; position: relative; }
+        .ring-chart canvas { width: 100%; height: 100%; border-radius: 50%; }
+        .ring-center {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            text-align: center;
+        }
+        .ring-center .score { font-size: 28px; font-weight: 700; color: #fff; }
+        .ring-center .label { font-size: 11px; color: #888; }
+        .list-item {
+            padding: 12px; border-bottom: 1px solid #2a2a4e; cursor: pointer; transition: 0.2s;
+        }
+        .list-item:hover { background: #1f1f3a; }
+        .list-item .title { font-size: 15px; font-weight: 600; }
+        .list-item .meta { font-size: 12px; color: #888; margin-top: 4px; display: flex; gap: 8px; flex-wrap: wrap; }
+        .cold-start-banner {
+            background: linear-gradient(135deg, #ff6b35, #f7931e); color: #fff;
+            padding: 10px 16px; border-radius: 12px; margin-bottom: 12px;
+            font-size: 13px; text-align: center;
+        }
+        .loading { text-align: center; padding: 40px; color: #888; }
+        .alert { padding: 10px; border-radius: 10px; margin-bottom: 8px; font-size: 13px; }
+        .alert-error { background: #3a1010; color: #ff6666; border: 1px solid #5a2020; }
+        .alert-success { background: #103a20; color: #66ff88; border: 1px solid #205a30; }
+        .alert-info { background: #10203a; color: #6699ff; border: 1px solid #20305a; }
+        .text-center { text-align: center; }
+        .mt-8 { margin-top: 8px; }
+        .mt-16 { margin-top: 16px; }
+        .mb-8 { margin-bottom: 8px; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<div id="coldStartBanner" class="cold-start-banner hidden"></div>
+
+<div class="header">
+    <h1>🤖 TG联邦智能治理</h1>
+    <div class="subtitle">信用分 | 联邦网络 | 跨群组治理</div>
+</div>
+
+<!-- 首页 -->
+<div id="page-home" class="page active">
+    <div id="profileCard" class="card text-center">
+        <div class="ring-chart">
+            <canvas id="ringCanvas" width="240" height="240"></canvas>
+            <div class="ring-center">
+                <div class="score" id="creditScore">-</div>
+                <div class="label" id="creditRank">-</div>
+            </div>
+        </div>
+        <div style="margin-top:8px;font-size:13px;color:#888;" id="userIdDisplay">用户ID: -</div>
+        <div style="margin-top:4px;">
+            <span class="badge" id="riskBadge">安全</span>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">📊 信息汇总</div>
+        <div style="font-size:13px;line-height:1.8;">
+            <div>认证广告商: <span id="isAdvertiser">❌</span></div>
+            <div>冻结状态: <span id="isFrozen">正常</span></div>
+            <div>邀请人数: <span id="inviteCount">0</span></div>
+            <div>系统版本: <span id="systemVersion">-</span></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">⭐ 评分概览</div>
+        <div id="ratingOverview" style="font-size:13px;color:#888;">暂无</div>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-secondary" onclick="showPage('page-search')">🔍 搜索</button>
+        <button class="btn btn-secondary" onclick="showPage('page-ranking')">🏆 排行</button>
+        <button class="btn btn-secondary" onclick="window.open('/api/captcha','_blank')">🔐 验证码</button>
+    </div>
+</div>
+
+<!-- 搜索 -->
+<div id="page-search" class="page">
+    <div class="search-box">
+        <input id="searchInput" placeholder="搜索名称、描述..." onkeydown="if(event.key==='Enter') doSearch()">
+        <button onclick="doSearch()">搜索</button>
+    </div>
+    <div class="filter-row">
+        <select id="filterType">
+            <option value="">全部</option>
+            <option value="1">群组</option>
+            <option value="2">频道</option>
+            <option value="3">机器人</option>
+            <option value="4">个人</option>
+            <option value="5">代理</option>
+        </select>
+        <select id="filterCountry">
+            <option value="">国家</option>
+            <option value="CN">🇨🇳 中国</option>
+            <option value="US">🇺🇸 美国</option>
+            <option value="JP">🇯🇵 日本</option>
+            <option value="KR">🇰🇷 韩国</option>
+            <option value="SG">🇸🇬 新加坡</option>
+            <option value="HK">🇭🇰 香港</option>
+            <option value="TW">🇹🇼 台湾</option>
+            <option value="RU">🇷🇺 俄罗斯</option>
+        </select>
+        <button id="sortByRating" onclick="toggleSort()">⭐ 评分排序</button>
+    </div>
+    <div id="searchResults"></div>
+    <div id="searchLoading" class="loading hidden">加载中...</div>
+</div>
+
+<!-- 详情 -->
+<div id="page-detail" class="page">
+    <button class="btn btn-secondary mb-8" onclick="showPage('page-search')">← 返回</button>
+    <div id="detailContent"></div>
+    <div class="card mt-16">
+        <div class="card-title">⭐ 评分</div>
+        <div class="stars" id="ratingStars">
+            <span class="star" data-score="1" onclick="rate(1)">☆</span>
+            <span class="star" data-score="2" onclick="rate(2)">☆</span>
+            <span class="star" data-score="3" onclick="rate(3)">☆</span>
+            <span class="star" data-score="4" onclick="rate(4)">☆</span>
+            <span class="star" data-score="5" onclick="rate(5)">☆</span>
+        </div>
+        <div id="ratingSummary" style="font-size:12px;color:#888;margin-top:4px;"></div>
+        <div id="ratingAlert" class="hidden mt-8"></div>
+    </div>
+</div>
+
+<!-- 排行榜 -->
+<div id="page-ranking" class="page">
+    <div class="filter-row">
+        <button class="active" data-rank="user" onclick="switchRank('user',this)">👤 用户</button>
+        <button data-rank="group" onclick="switchRank('group',this)">🏢 群组</button>
+        <button data-rank="bot" onclick="switchRank('bot',this)">🤖 机器人</button>
+        <button data-rank="proxy" onclick="switchRank('proxy',this)">🔗 代理</button>
+    </div>
+    <div id="rankingList"></div>
+</div>
+
+<!-- 审核 -->
+<div id="page-review" class="page">
+    <div class="filter-row">
+        <button class="active" onclick="switchReviewTab('pending',this)">待处理</button>
+        <button onclick="switchReviewTab('all',this)">全部</button>
+    </div>
+    <div id="reviewList"></div>
+</div>
+
+<!-- 标签栏 -->
+<div class="tab-bar">
+    <div class="tab-item active" onclick="showPage('page-home')"><div class="icon">🏠</div><div class="label">首页</div></div>
+    <div class="tab-item" onclick="showPage('page-search')"><div class="icon">🔍</div><div class="label">搜索</div></div>
+    <div class="tab-item" onclick="showPage('page-ranking')"><div class="icon">🏆</div><div class="label">排行</div></div>
+    <div class="tab-item" onclick="showPage('page-review')"><div class="icon">📋</div><div class="label">审核</div></div>
+</div>
+
+<script>
+const API = '/api';
+let userId = null;
+let searchSortBy = 'members';
+let currentRank = 'user';
+let detailUuid = null;
+
+document.addEventListener('DOMContentLoaded', () => {
+    try { if (window.Telegram?.WebApp) { Telegram.WebApp.ready(); Telegram.WebApp.expand(); userId = Telegram.WebApp.initDataUnsafe?.user?.id; } } catch(e){}
+    const u = new URLSearchParams(window.location.search);
+    if (!userId && u.get('user_id')) userId = parseInt(u.get('user_id'));
+    if (userId) { loadProfile(); loadSystemStatus(); }
+});
+
+function showPage(id) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    document.querySelectorAll('.tab-item').forEach((t,i) => {
+        t.classList.toggle('active', (['page-home','page-search','page-ranking','page-review'][i] === id));
+    });
+    if (id === 'page-home' && userId) loadProfile();
+    if (id === 'page-ranking') loadRanking(currentRank);
+    if (id === 'page-review') loadReviewList();
+}
+
+function loadProfile() {
+    if (!userId) { document.getElementById('creditScore').textContent = '?'; return; }
+    fetch(API + '/users/' + userId).then(r => r.json()).then(d => {
+        document.getElementById('creditScore').textContent = d.credit_score;
+        document.getElementById('creditRank').textContent = d.rank || '-';
+        let badge = document.getElementById('riskBadge');
+        badge.textContent = d.risk_level || '安全';
+        let c = '#00d4aa'; if (d.risk_level === '死刑') c = '#ff4444'; else if (d.risk_level === '危险') c = '#ff6b35'; else if (d.risk_level === '关注') c = '#f7931e';
+        badge.style.background = c; badge.style.color = c === '#ffd700' ? '#000' : '#fff';
+        document.getElementById('userIdDisplay').textContent = '用户ID: ' + d.user_id;
+        document.getElementById('isAdvertiser').textContent = d.is_advertiser ? '✅' : '❌';
+        document.getElementById('isFrozen').textContent = d.is_frozen ? '❄️ 冻结' : '正常';
+        document.getElementById('inviteCount').textContent = d.invite_count || 0;
+        drawRing(d.credit_score);
+        if (d.avg_rating) document.getElementById('ratingOverview').innerHTML = '⭐ ' + d.avg_rating.toFixed(1) + ' (' + d.rating_count + '人)';
+    }).catch(() => {});
+}
+
+function drawRing(score) {
+    var c = document.getElementById('ringCanvas'), ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, 240, 240);
+    ctx.beginPath(); ctx.arc(120, 120, 50, 0, Math.PI * 2);
+    ctx.strokeStyle = '#2a2a4e'; ctx.lineWidth = 10; ctx.stroke();
+    var pct = score / 100;
+    var col = score >= 90 ? '#00d4aa' : score >= 70 ? '#ffd700' : score >= 50 ? '#c0c0c0' : '#ff4444';
+    ctx.beginPath(); ctx.arc(120, 120, 50, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * pct);
+    ctx.strokeStyle = col; ctx.lineWidth = 10; ctx.lineCap = 'round'; ctx.stroke();
+}
+
+function loadSystemStatus() {
+    fetch(API + '/system/status').then(r => r.json()).then(d => {
+        if (d.cold_start) {
+            var b = document.getElementById('coldStartBanner');
+            b.classList.remove('hidden'); b.innerHTML = '🟡 <strong>系统冷启动中</strong> 第' + d.cold_start_day + '天 · 处罚将人工确认';
+        }
+        document.getElementById('systemVersion').textContent = d.version || 'v1.0.0';
+    }).catch(() => {});
+}
+
+// === 搜索 ===
+let searchPage = 1;
+function doSearch(r) { if (r !== false) searchPage = 1;
+    var kw = document.getElementById('searchInput').value, t = document.getElementById('filterType').value, co = document.getElementById('filterCountry').value;
+    document.getElementById('searchLoading').classList.remove('hidden'); document.getElementById('searchLoading').textContent = '加载中...';
+    var p = new URLSearchParams({keyword:kw, country:co, sort_by:searchSortBy, page:searchPage, size:20});
+    if (t) p.set('type', t);
+    fetch(API + '/search?' + p).then(r => r.json()).then(d => {
+        document.getElementById('searchLoading').classList.add('hidden');
+        var el = document.getElementById('searchResults'); el.innerHTML = '';
+        if (!d.records || d.records.length === 0) { el.innerHTML = '<div class="card text-center" style="color:#888;">无结果</div>'; return; }
+        var tl = {1:'👥群组',2:'📢频道',3:'🤖机器人',4:'👤个人',5:'🔗代理'};
+        d.records.forEach(function(r){
+            var div = document.createElement('div'); div.className = 'list-item';
+            var stars = r.avg_rating ? '⭐' + r.avg_rating.toFixed(1) : '暂无评分';
+            div.innerHTML = '<div class="title">' + (r.title||'无名称') + '</div><div class="meta"><span>' + (tl[r.type]||'其他') + '</span><span>' + (r.country||'') + '</span><span>' + stars + ' (' + (r.rating_count||0) + ')</span><span>👥 ' + (r.members||'?') + '</span></div><div style="font-size:12px;color:#666;margin-top:4px;">' + (r.description||'') + '</div>';
+            div.onclick = function(){ showDetail(r.uuid); };
+            el.appendChild(div);
+        });
+        if (d.total > searchPage * 20) { var m = document.createElement('div'); m.className = 'text-center mt-8'; m.innerHTML = '<button class="btn btn-secondary" onclick="doSearch(false)">加载更多</button>'; el.appendChild(m); }
+    }).catch(() => { document.getElementById('searchLoading').textContent = '加载失败'; });
+}
+function toggleSort() { searchSortBy = searchSortBy === 'rating' ? 'members' : 'rating'; document.getElementById('sortByRating').textContent = searchSortBy === 'rating' ? '⭐ 评分排序 ✓' : '⭐ 评分排序'; doSearch(); }
+
+// === 详情 ===
+function showDetail(uuid) { detailUuid = uuid; showPage('page-detail');
+    fetch(API + '/detail/' + uuid).then(r => r.json()).then(d => {
+        var tl = {1:'群组',2:'频道',3:'机器人',4:'个人',5:'代理'};
+        document.getElementById('detailContent').innerHTML = '<div class="card"><h2 style="font-size:18px;">' + (d.title||'无名称') + '</h2><div style="font-size:13px;color:#888;margin-top:8px;"><div>类型: ' + (tl[d.type]||'其他') + '</div><div>国家: ' + (d.country||'-') + ' / 语言: ' + (d.language||'-') + '</div><div>成员: ' + (d.members||'?') + '</div><div>分类: ' + (d.classification||'-') + '</div>' + (d.username ? '<div>@' + d.username + '</div>' : '') + (d.link ? '<div>🔗 <a href="' + d.link + '" style="color:#6699ff;">' + d.link + '</a></div>' : '') + (d.flagged ? '<div style="color:#ff4444;">⚠️ 已被标记</div>' : '') + '</div>' + (d.description ? '<div style="font-size:13px;margin-top:8px;color:#bbb;">' + d.description + '</div>' : '') + '</div>';
+        var s = document.getElementById('ratingSummary');
+        if (d.avg_rating && d.avg_rating > 0) { var f = Math.round(d.avg_rating); s.innerHTML = '★'.repeat(f) + '☆'.repeat(5-f) + ' ' + d.avg_rating.toFixed(1) + ' (' + d.rating_count + '人)<br><small>5★:' + (d.r5||0) + ' 4★:' + (d.r4||0) + ' 3★:' + (d.r3||0) + ' 2★:' + (d.r2||0) + ' 1★:' + (d.r1||0) + '</small>'; }
+        else s.textContent = '暂无评分';
+        setStars(d.my_rating || 0);
+        document.getElementById('ratingAlert').classList.add('hidden');
+    }).catch(() => { document.getElementById('detailContent').innerHTML = '<div class="card alert-error">加载失败</div>'; });
+}
+
+function setStars(n) { document.querySelectorAll('#ratingStars .star').forEach(s => { var sc = parseInt(s.dataset.score); s.textContent = sc <= n ? '★' : '☆'; s.classList.toggle('active', sc <= n); }); }
+function rate(score) { if (!detailUuid) return;
+    var a = document.getElementById('ratingAlert'); a.classList.remove('hidden');
+    fetch(API + '/rating/' + detailUuid + '?user_id=' + (userId||0) + '&score=' + score, { method: 'POST' }).then(r => r.json()).then(d => {
+        if (d.success) { setStars(score); a.className = 'alert alert-success mt-8'; a.textContent = d.message || '评分成功'; setTimeout(function(){ showDetail(detailUuid); }, 500); }
+        else { a.className = 'alert alert-error mt-8'; a.textContent = d.message || '评分失败'; }
+    }).catch(() => { a.className = 'alert alert-error mt-8'; a.textContent = '网络错误'; });
+}
+
+// === 排行 ===
+function switchRank(r, btn) { currentRank = r; document.querySelectorAll('#page-ranking .filter-row button').forEach(b => b.classList.remove('active')); btn.classList.add('active'); loadRanking(r); }
+function loadRanking(rank) {
+    var el = document.getElementById('rankingList'); el.innerHTML = '<div class="loading">加载中...</div>';
+    var lb = {user:'👤 用户信誉榜', group:'🏢 群组环境榜', bot:'🤖 机器人服务榜', proxy:'🔗 代理稳定榜'};
+    fetch(API + '/ranking/' + rank + '?top=20').then(r => r.json()).then(d => {
+        el.innerHTML = '<div class="card"><div class="card-title">' + (lb[rank] || '排行榜') + '</div></div>';
+        var c = el.querySelector('.card');
+        if (!d.items || d.items.length === 0) { c.innerHTML += '<div style="color:#888;font-size:13px;">暂无数据</div>'; return; }
+        d.items.forEach(function(item, i){
+            var rc = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : '';
+            var m = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '';
+            c.innerHTML += '<div class="rank-item"><div class="rank-num ' + rc + '">' + (m || (i+1)) + '</div><div style="flex:1;"><div>' + (item.name || item.id) + '</div><div style="font-size:11px;color:#888;">' + (item.meta||'') + '</div></div><div style="font-weight:600;color:#00d4aa;">' + ((item.score||0).toFixed(1)) + '</div></div>';
+        });
+    }).catch(() => { el.innerHTML = '<div class="card alert-error">加载失败</div>'; });
+}
+
+// === 审核 ===
+function switchReviewTab(t, btn) { reviewType = t; document.querySelectorAll('#page-review .filter-row button').forEach(b => b.classList.remove('active')); btn.classList.add('active'); loadReviewList(); }
+let reviewType = 'pending';
+function loadReviewList() {
+    var el = document.getElementById('reviewList'); el.innerHTML = '<div class="loading">加载中...</div>';
+    fetch(API + '/review/list?status=' + (reviewType === 'pending' ? 'PENDING' : '') + '&size=20').then(r => r.json()).then(d => {
+        el.innerHTML = '';
+        if (!d.tickets || d.tickets.length === 0) { el.innerHTML = '<div class="card text-center" style="color:#888;">无待处理工单</div>'; return; }
+        d.tickets.forEach(function(t){
+            var div = document.createElement('div'); div.className = 'card';
+            var pe = t.priority === 2 ? '🔴' : t.priority === 1 ? '🟡' : '⚪';
+            div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;"><div><strong>' + pe + ' #' + t.ticket_id + '</strong><span style="margin-left:8px;font-size:12px;color:#888;">' + t.ticket_type + '</span></div><span style="font-size:11px;color:#888;">SLA: ' + (t.sla_minutes||'-') + 'min</span></div><div style="font-size:12px;color:#888;margin-top:4px;">目标: ' + (t.target_user_id||'-') + ' | ' + ((t.content||'').substring(0,60)) + '</div><div style="margin-top:8px;display:flex;gap:6px;"><button class="btn btn-primary" style="padding:4px 12px;font-size:12px;" onclick="reviewAction(' + t.ticket_id + ',\'pass\')">通过</button><button class="btn btn-danger" style="padding:4px 12px;font-size:12px;" onclick="reviewAction(' + t.ticket_id + ',\'punish\')">处罚</button><button class="btn btn-secondary" style="padding:4px 12px;font-size:12px;" onclick="reviewAction(' + t.ticket_id + ',\'escalate\')">升级</button></div>';
+            el.appendChild(div);
+        });
+    }).catch(() => { el.innerHTML = '<div class="card alert-error">加载失败</div>'; });
+}
+function reviewAction(id, act) { fetch(API + '/review/' + act + '/' + id, { method: 'POST' }).then(r => r.json()).then(d => { if (d.success) loadReviewList(); }).catch(() => {}); }
+
+setInterval(function(){ if (document.getElementById('page-home').classList.contains('active')) loadProfile(); }, 30000);
+</script>
+</body>
+</html>
