@@ -58,9 +58,16 @@ EOF
         fedora|rhel|centos|rocky|almalinux)
             PKG_UPD="dnf makecache -q 2>/dev/null || yum makecache -q 2>/dev/null || true"
             PKG_INST="dnf install -y -q 2>/dev/null || yum install -y -q 2>/dev/null || true"
-            if [ -f /etc/yum.repos.d/CentOS-Base.repo ] && ! grep -q "mirrors.aliyun.com" /etc/yum.repos.d/CentOS-Base.repo 2>/dev/null; then
-                curl -sL -o /etc/yum.repos.d/CentOS-Base.repo "https://mirrors.aliyun.com/repo/Centos-${OS_VER%%.*}.repo" 2>/dev/null || true
-                ok "yum 切换为阿里云镜像"
+            if [ -f /etc/yum.repos.d/CentOS-Base.repo ] && ! grep -q "mirrors.aliyun.com\|vault.centos.org" /etc/yum.repos.d/CentOS-Base.repo 2>/dev/null; then
+                if [ "${OS_VER%%.*}" = "7" ]; then
+                    info "CentOS 7 已 EOL（2024-06），使用 Vault 归档..."
+                    sed -i 's|mirror.centos.org|vault.centos.org|g' /etc/yum.repos.d/CentOS-Base.repo 2>/dev/null || true
+                    sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-Base.repo 2>/dev/null || true
+                    sed -i 's|mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/CentOS-Base.repo 2>/dev/null || true
+                else
+                    curl -sL -o /etc/yum.repos.d/CentOS-Base.repo "https://mirrors.aliyun.com/repo/Centos-${OS_VER%%.*}.repo" 2>/dev/null || true
+                fi
+                ok "yum 切换为国内镜像"
             fi ;;
         arch|manjaro)
             PKG_UPD="pacman -Sy --noconfirm"; PKG_INST="pacman -S --noconfirm" ;;
@@ -331,8 +338,10 @@ logging.level.com.tgf.bot=INFO
 logging.level.org.springframework=WARN
 logging.pattern.console=%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n
 PROPS
+    chmod 600 /etc/tg-federal-bot/application.properties
+    chmod 644 /etc/tg-federal-bot/application-public.properties
     ok "配置写入 /etc/tg-federal-bot/"
-    ok "安全凭据 -> application.properties（不提交 Git）"
+    ok "安全凭据 -> application.properties（chmod 600，仅 root 可读）"
     ok "公共配置 -> application-public.properties"
 }
 # ═══════════════════════════════
@@ -369,8 +378,8 @@ install_java() {
     arch=$(uname -m); [ "$arch" = "aarch64" ] && arch="aarch64" || arch="x64"
     DOWNLOADED=false
     for url in \
-        "https://repo.huaweicloud.com/java/jdk/21.0.3+9/OpenJDK21U-jdk_${arch}_linux_hotspot_21.0.3_9.tar.gz" \
-        "https://mirrors.huaweicloud.com/homebrew/bottles/openjdk@21-21.0.3.bottle.tar.gz"; do
+        "https://mirrors.huaweicloud.com/adoptium/21/jdk/${arch}/linux/OpenJDK21U-jdk_${arch}_linux_hotspot_21.0.3_9.tar.gz" \
+        "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.3%2B9/OpenJDK21U-jdk_${arch}_linux_hotspot_21.0.3_9.tar.gz"; do
         curl -sL --connect-timeout 10 --max-time 120 "$url" -o /tmp/jdk21.tar.gz && {
             file /tmp/jdk21.tar.gz | grep -q "gzip\|Zip" && { DOWNLOADED=true; break; }
         }
@@ -393,7 +402,7 @@ install_java() {
     info "尝试从阿里云 Adoptium 安装..."
     case "$OS_ID" in
         ubuntu|debian)
-            curl -sL "https://mirrors.aliyun.com/Adoptium/GPG-KEY-adoptium" -o /tmp/adoptium.gpg 2>/dev/null || true
+            curl -sL "https://packages.adoptium.net/artifactory/api/gpg/key/public" -o /tmp/adoptium.gpg 2>/dev/null || true
             if [ -s /tmp/adoptium.gpg ]; then
                 gpg --dearmor -o /usr/share/keyrings/adoptium.gpg /tmp/adoptium.gpg 2>/dev/null || true
                 echo "deb [signed-by=/usr/share/keyrings/adoptium.gpg] https://mirrors.aliyun.com/Adoptium/deb $(lsb_release -cs 2>/dev/null || echo 'jammy') main" > /etc/apt/sources.list.d/adoptium.list
@@ -430,7 +439,7 @@ install_maven() {
         "https://repo.huaweicloud.com/apache/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz" \
         -o /tmp/maven.tar.gz || {
         curl -sL --connect-timeout 10 --max-time 120 \
-            "https://mirrors.tuna.tsinghua.edu.cn/apache/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz" \
+            "https://dlcdn.apache.org/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz" \
             -o /tmp/maven.tar.gz
     }
 
@@ -462,9 +471,9 @@ install_postgres() {
         ubuntu|debian)
             # 阿里云 PG 源
             CODENAME=$(lsb_release -cs 2>/dev/null || echo 'jammy')
-            curl -sL "https://mirrors.aliyun.com/postgresql/apt/GPG-KEY-PGDG" -o /tmp/pgdg.gpg 2>/dev/null
+            curl -sL "https://www.postgresql.org/media/keys/ACCC4CF8.asc" -o /tmp/pgdg.gpg 2>/dev/null
             if [ -s /tmp/pgdg.gpg ]; then
-                gpg --dearmor -o /usr/share/keyrings/pgdg.gpg /tmp/pgdg.gpg 2>/dev/null || true
+                gpg --dearmor -o /usr/share/keyrings/pgdg.gpg /tmp/pgdg.asc 2>/dev/null || true
                 echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://mirrors.aliyun.com/postgresql/apt/ ${CODENAME}-pgdg main" > /etc/apt/sources.list.d/pgdg.list
                 $PKG_UPD 2>/dev/null || true
                 $PKG_INST postgresql-16 postgresql-client-16 2>/dev/null || $PKG_INST postgresql postgresql-client
@@ -546,7 +555,7 @@ install_es() {
             else
                 # 直接下载 deb 包
                 curl -sL --connect-timeout 10 --max-time 120 \
-                    "https://mirrors.huaweicloud.com/elasticstack/8.x/apt/pool/main/e/elasticsearch/elasticsearch-8.15.0-amd64.deb" \
+                    "https://mirrors.huaweicloud.com/elasticstack/8.x/apt/pool/main/e/elasticsearch/elasticsearch-8.15.0-${ES_ARCH}.deb" \
                     -o /tmp/es.deb 2>/dev/null && dpkg -i /tmp/es.deb 2>/dev/null || \
                 warn "ES 安装失败"
             fi
@@ -740,7 +749,10 @@ setup_docker_mirror() {
     if command -v docker &>/dev/null; then
         info "配置 Docker 镜像加速..."
         mkdir -p /etc/docker
-        cat > /etc/docker/daemon.json <<'DOCKER'
+        if [ -f /etc/docker/daemon.json ]; then
+            python3 -c "import json;cfg=json.load(open('/etc/docker/daemon.json'));mirrors=cfg.setdefault('registry-mirrors',[]);[mirrors.append(m) for m in ['https://docker.1ms.run','https://docker.xuanyuan.me','https://dockerpull.com'] if m not in mirrors];json.dump(cfg,open('/etc/docker/daemon.json','w'),indent=2)" 2>/dev/null || true
+        else
+            cat > /etc/docker/daemon.json <<'DOCKER'
 {
     "registry-mirrors": [
         "https://docker.1ms.run",
@@ -749,6 +761,7 @@ setup_docker_mirror() {
     ]
 }
 DOCKER
+        fi
         systemctl daemon-reload 2>/dev/null || true
         systemctl restart docker 2>/dev/null || true
         ok "Docker 镜像加速已配置"
@@ -797,7 +810,8 @@ main() {
             info "安装 Ollama..."
             curl -fsSL https://ollama.com/install.sh | sh 2>/dev/null || {
                 warn "Ollama 官方安装失败，尝试国内镜像..."
-                curl -fsSL https://mirror.ghproxy.com/https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tgz -o /tmp/ollama.tgz
+                OLLAMA_ARCH=$(uname -m); [ "$OLLAMA_ARCH" = "x86_64" ] && OLLAMA_ARCH="amd64"; [ "$OLLAMA_ARCH" = "aarch64" ] && OLLAMA_ARCH="arm64"
+                curl -fsSL --connect-timeout 10 --max-time 120 "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-${OLLAMA_ARCH}.tgz" -o /tmp/ollama.tgz || curl -fsSL --connect-timeout 10 --max-time 120 "https://mirror.ghproxy.com/https://github.com/ollama/ollama/releases/latest/download/ollama-linux-${OLLAMA_ARCH}.tgz" -o /tmp/ollama.tgz
                 tar -C /usr/local -xzf /tmp/ollama.tgz
                 cat > /etc/systemd/system/ollama.service <<'SVC'
 [Unit]
