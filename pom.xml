@@ -20,7 +20,7 @@
         <java.version>21</java.version>
         <telegram-bot.version>7.2.0</telegram-bot.version>
         <okhttp.version>4.12.0</okhttp.version>
-        <elasticsearch.version>8.15.5</elasticsearch.version>
+        <elasticsearch.version>9.4.2</elasticsearch.version>
         <redisson.version>3.28.0</redisson.version>
     </properties>
 
