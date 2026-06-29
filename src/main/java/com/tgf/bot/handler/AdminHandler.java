@@ -65,8 +65,15 @@ public class AdminHandler implements BotHandler {
     }
 
     private boolean isSuperAdmin(long userId) {
+        if (creatorIdsStr == null || creatorIdsStr.isBlank()) return false;
         for (String s : creatorIdsStr.split(",")) {
-            if (Long.parseLong(s.trim()) == userId) return true;
+            String trimmed = s.trim();
+            if (trimmed.isEmpty()) continue;
+            try {
+                if (Long.parseLong(trimmed) == userId) return true;
+            } catch (NumberFormatException e) {
+                log.warn("Invalid admin ID in config: {}", trimmed);
+            }
         }
         return false;
     }
@@ -78,10 +85,9 @@ public class AdminHandler implements BotHandler {
         String text = msg.text().trim();
         return text.startsWith("/admin ") || text.equals("/admin")
             || text.startsWith("/globalban ") || text.startsWith("/unban ")
-            || text.startsWith("/broadcast ") || text.startsWith("/degrade ")
-            || text.startsWith("/config ") || text.startsWith("/emergency")
-            || text.startsWith("/rollback ") || text.startsWith("/unfreeze ")
-            || text.startsWith("/freeze ")
+            || text.startsWith("/broadcast ")
+            || text.startsWith("/config ")
+            || text.startsWith("/unfreeze ") || text.startsWith("/freeze ")
             || text.startsWith("/submission ")
             || text.startsWith("/audit");
     }
@@ -106,13 +112,10 @@ public class AdminHandler implements BotHandler {
             case "/globalban" -> handleGlobalBan(bot, chatId, text);
             case "/unban" -> handleUnban(bot, chatId, text);
             case "/broadcast" -> handleBroadcast(bot, chatId, text, from.id());
-            case "/degrade" -> handleDegrade(bot, chatId, text);
             case "/config" -> handleConfig(bot, chatId, text);
-            case "/emergency" -> handleEmergency(bot, chatId);
-            case "/rollback" -> handleRollback(bot, chatId, text);
             case "/freeze" -> handleFreeze(bot, chatId, text);
             case "/unfreeze" -> handleUnfreeze(bot, chatId, text);
-            case "/submission" -> handleSubmissionCmd(bot, chatId, text);
+            case "/submission" -> handleSubmissionCmd(bot, chatId, text, from.id());
             case "/circuit" -> handleCircuitCmd(bot, chatId, text);
             case "/audit" -> handleAudit(bot, chatId, text);
             default -> replyAudit(bot, chatId, "未知管理命令");
@@ -218,11 +221,12 @@ public class AdminHandler implements BotHandler {
         var u = user.get();
         u.setCreditScore(50);
         u.setDeepseekRiskLevel(com.tgf.bot.model.UserEntity.RiskLevel.SAFE);
+        u.setFrozenUntil(null);                     // 同时解除冻结
         userRepo.save(u);
-        replyAudit(bot, chatId, "✅ @" + username + " 已解除封禁，信用分重置为50");
+        replyAudit(bot, chatId, "✅ @" + username + " 已解除封禁，信用分重置为50，冻结已解除");
     }
 
-    private void handleBroadcast(TelegramBot bot, Long chatId, String text, long adminId) {
+        private void handleBroadcast(TelegramBot bot, Long chatId, String text, long adminId) {
         String msg = text.length() > 10 ? text.substring(10).trim() : "";
         if (msg.isEmpty()) {
             replyAudit(bot, chatId, "用法：/broadcast <消息内容>（每日上限" + broadcastDailyLimit + "次，单次≤2000字符）");
@@ -233,18 +237,19 @@ public class AdminHandler implements BotHandler {
             return;
         }
 
-        // 每日广播次数限制
+        // 每日广播次数限制：先检查再 INCR（单管理员场景下足够安全）
         String todayKey = "broadcast:daily:" + LocalDate.now() + ":" + adminId;
-        Long currentCount = redis.opsForValue().increment(todayKey);
-        if (currentCount != null && currentCount == 1) {
-            // 第一次计数，设置过期时间（到明天凌晨过期）
-            redis.expire(todayKey, 1, TimeUnit.DAYS);
-        }
-        if (currentCount != null && currentCount > broadcastDailyLimit) {
+        String currentCountStr = redis.opsForValue().get(todayKey);
+        int currentCount = currentCountStr != null ? Integer.parseInt(currentCountStr) : 0;
+
+        if (currentCount >= broadcastDailyLimit) {
             replyAudit(bot, chatId, "❌ 今日广播次数已达上限（" + broadcastDailyLimit + "次），请明天再试");
-            // 回滚计数
-            redis.opsForValue().decrement(todayKey);
             return;
+        }
+
+        Long newCount = redis.opsForValue().increment(todayKey);
+        if (newCount != null && newCount == 1) {
+            redis.expire(todayKey, 1, TimeUnit.DAYS);
         }
 
         try {
@@ -278,56 +283,29 @@ public class AdminHandler implements BotHandler {
             }
 
             log.info("Broadcast sent by admin {}: {} groups", chatId, count);
-            replyAudit(bot, chatId, "✅ 公告已发送至 " + count + " 个群组（今日第 " + currentCount + "/" + broadcastDailyLimit + " 次）");
+            replyAudit(bot, chatId, "✅ 公告已发送至 " + count + " 个群组（今日第 " + newCount + "/" + broadcastDailyLimit + " 次）");
         } catch (Exception e) {
-            // 发送失败时回滚计数
-            redis.opsForValue().decrement(todayKey);
             log.error("Broadcast failed: {}", e.getMessage());
             replyAudit(bot, chatId, "❌ 广播发送失败：" + e.getMessage());
         }
     }
 
-    private void handleDegrade(TelegramBot bot, Long chatId, String text) {
-        String mode = text.length() > 8 ? text.substring(8).trim() : "";
-        replyAudit(bot, chatId, "✅ 系统模式已切换为 " + mode);
-    }
-
     private void handleConfig(TelegramBot bot, Long chatId, String text) {
         String[] parts = text.split("\\s+");
         if (parts.length < 2) {
-            replyAudit(bot, chatId, "用法：/config save <模板名> - 保存配置\n"
-                + "/config load <模板名> - 加载配置\n"
-                + "/config reset - 恢复出厂设置\n"
-                + "/config show - 查看当前配置");
+            replyAudit(bot, chatId, "用法：/config show - 查看当前配置");
             return;
         }
         switch (parts[1]) {
-            case "save" -> {
-                String templateName = parts.length >= 3 ? parts[2] : "backup_" + System.currentTimeMillis();
-                replyAudit(bot, chatId, "✅ 配置已保存为: " + templateName);
-            }
-            case "load" -> replyAudit(bot, chatId, "✅ 配置已加载");
-            case "reset" -> replyAudit(bot, chatId, "✅ 配置已重置为出厂设置");
             case "show" -> {
-                // 回显关键配置（不泄露任何 token 片段）
                 String info = "📋 当前配置概要：\n\n"
                     + "🤖 Bot: ********\n"
                     + "📡 审核模式: cloud/local (见配置文件)\n"
                     + "\n使用 /admin 查看完整管理菜单";
                 replyAudit(bot, chatId, info);
             }
-            default -> replyAudit(bot, chatId, "未知子命令：save / load / reset / show");
+            default -> replyAudit(bot, chatId, "未知子命令：show");
         }
-    }
-
-    private void handleEmergency(TelegramBot bot, Long chatId) {
-        log.warn("EMERGENCY PAUSE triggered by admin {}", chatId);
-        replyAudit(bot, chatId, "🔴 紧急暂停：所有自动化处罚已停止");
-    }
-
-    private void handleRollback(TelegramBot bot, Long chatId, String text) {
-        String version = text.length() > 9 ? text.substring(9).trim() : "";
-        replyAudit(bot, chatId, "✅ 正在回滚至版本 " + version);
     }
 
     private void handleFreeze(TelegramBot bot, Long chatId, String text) {
@@ -337,7 +315,19 @@ public class AdminHandler implements BotHandler {
             return;
         }
         String username = parts[1].replace("@", "");
-        int hours = parts.length >= 3 ? Integer.parseInt(parts[2]) : 24;
+        int hours = 24;
+        if (parts.length >= 3) {
+            try {
+                hours = Integer.parseInt(parts[2]);
+                if (hours <= 0 || hours > 720) {
+                    replyAudit(bot, chatId, "❌ 冻结时长必须为 1~720 小时（30天）");
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                replyAudit(bot, chatId, "❌ 小时数格式错误，请输入有效数字");
+                return;
+            }
+        }
         var user = userRepo.findByUsername(username);
         if (user.isEmpty()) {
             replyAudit(bot, chatId, "❌ 用户 @" + username + " 未注册");
@@ -428,7 +418,7 @@ public class AdminHandler implements BotHandler {
         }
     }
 
-    private void handleSubmissionCmd(TelegramBot bot, Long chatId, String text) {
+    private void handleSubmissionCmd(TelegramBot bot, Long chatId, String text, long adminId) {
         String[] parts = text.split("\\s+");
         if (parts.length < 2) {
             replyAudit(bot, chatId, "用法：\n" +
@@ -471,7 +461,7 @@ public class AdminHandler implements BotHandler {
                 }
                 Long id = Long.parseLong(parts[2]);
                 String comment = parts.length >= 4 ? String.join(" ", java.util.Arrays.copyOfRange(parts, 3, parts.length)) : "";
-                String result = submissionService.approve(id, Long.parseLong(creatorIdsStr.split(",")[0]), comment);
+                String result = submissionService.approve(id, adminId, comment);
                 replyAudit(bot, chatId, result);
             }
             case "reject" -> {
@@ -481,7 +471,7 @@ public class AdminHandler implements BotHandler {
                 }
                 Long id = Long.parseLong(parts[2]);
                 String reason = parts.length >= 4 ? String.join(" ", java.util.Arrays.copyOfRange(parts, 3, parts.length)) : "无原因";
-                String result = submissionService.reject(id, Long.parseLong(creatorIdsStr.split(",")[0]), reason);
+                String result = submissionService.reject(id, adminId, reason);
                 replyAudit(bot, chatId, result);
             }
             default -> replyAudit(bot, chatId, "未知子命令，可用：list / approve <ID> / reject <ID>");

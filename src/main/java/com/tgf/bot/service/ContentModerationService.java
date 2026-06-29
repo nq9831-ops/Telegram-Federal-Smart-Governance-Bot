@@ -30,6 +30,18 @@ import java.time.Duration;
  * moderation.local.model=qwen2.5:7b
  * }</pre>
  *
+ * <p>依赖：</p>
+ * <ul>
+ *   <li>{@link ConcurrencyGuard} — DeepSeek API 并发控制（最多 10 并发）</li>
+ *   <li>{@link DeepSeekResult} — 分类结果数据模型</li>
+ * </ul>
+ *
+ * <p>被引用：</p>
+ * <ul>
+ *   <li>{@link GroupHandler} — 群组消息实时审核</li>
+ *   <li>{@link BotScheduler} — 每日跨群用户画像分析</li>
+ * </ul>
+ *
  * @since 1.0
  */
 @Service

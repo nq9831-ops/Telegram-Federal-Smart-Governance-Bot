@@ -25,6 +25,7 @@ if [ "$EUID" -ne 0 ]; then err "必须使用 sudo / root 执行脚本"; exit 1; 
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+DEPS_DIR="${SCRIPT_DIR}/deps"
 
 # 全局代理统一变量（仅此处修改端口即可全局生效）
 
@@ -263,16 +264,22 @@ install_clash_meta() {
  esac
 
  local TGZ="mihomo-linux-${ARCH}-v${MIHOMO_VER}.gz"
- local URL="https://mirror.ghproxy.com/https://github.com/MetaCubeX/mihomo/releases/download/v${MIHOMO_VER}/mihomo-linux-${ARCH}-v${MIHOMO_VER}.gz"
- local URL_FALLBACK="https://github.com/MetaCubeX/mihomo/releases/download/v${MIHOMO_VER}/mihomo-linux-${ARCH}-v${MIHOMO_VER}.gz"
 
  rm -f "/tmp/${TGZ}"
+ # 本地 deps 优先
+ if [ -f "${DEPS_DIR}/mihomo.gz" ]; then
+ info " -> 使用本地离线包: ${DEPS_DIR}/mihomo.gz"
+ cp "${DEPS_DIR}/mihomo.gz" "/tmp/${TGZ}"
+ else
+ local URL="https://mirror.ghproxy.com/https://github.com/MetaCubeX/mihomo/releases/download/v${MIHOMO_VER}/mihomo-linux-${ARCH}-v${MIHOMO_VER}.gz"
+ local URL_FALLBACK="https://github.com/MetaCubeX/mihomo/releases/download/v${MIHOMO_VER}/mihomo-linux-${ARCH}-v${MIHOMO_VER}.gz"
  if ! curl -sL --connect-timeout 10 --max-time 60 "$URL" -o "/tmp/${TGZ}" 2>/dev/null; then
  info "ghproxy 下载失败，切换 GitHub 直连..."
  curl -sL --connect-timeout 10 --max-time 60 "$URL_FALLBACK" -o "/tmp/${TGZ}" 2>/dev/null || {
  err "Mihomo 下载失败，请手动安装: https://github.com/MetaCubeX/mihomo/releases"
  exit 1
  }
+ fi
  fi
 
  if [ -s "/tmp/${TGZ}" ]; then
@@ -677,25 +684,36 @@ install_java() {
  return
  fi
  fi
- # 华为云二进制兜底（ARM64 fallback 到 Adoptium/Eclipse 官方）
+ # 本地 deps 优先
+ local jdk_file="OpenJDK21U-jdk_${arch}_linux_hotspot_21.0.3_9.tar.gz"
+ if [ -f "${DEPS_DIR}/${jdk_file}" ]; then
+ info " -> 使用本地离线包: ${DEPS_DIR}/${jdk_file}"
+ mkdir -p /opt
+ tar -xzf "${DEPS_DIR}/${jdk_file}" -C /opt/
+ else
+ # 网络下载
  local jdk_url_arm="https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.3%2B9/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.3_9.tar.gz"
  local jdk_url_x64="https://mirrors.huaweicloud.com/adoptium/21/jdk/${arch}/linux/OpenJDK21U-jdk_${arch}_linux_hotspot_21.0.3_9.tar.gz"
  local jdk_url="${jdk_url_x64}"
  [ "$arch" = "aarch64" ] && jdk_url="${jdk_url_arm}"
  rm -f /tmp/jdk21.tar.gz
  info " -> 下载 JDK21 二进制（约 200MB）..."
- if curl -sL --connect-timeout 10 --max-time 180 "$jdk_url" -o /tmp/jdk21.tar.gz && [ -s /tmp/jdk21.tar.gz ]; then
- mkdir -p /opt
+ curl -sL --connect-timeout 10 --max-time 300 --progress-bar "$jdk_url" -o /tmp/jdk21.tar.gz || {
+ warn "直连失败，尝试镜像..."
+ curl -sL --connect-timeout 10 --max-time 300 --progress-bar "https://mirror.ghproxy.com/https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.3%2B9/${jdk_file}" -o /tmp/jdk21.tar.gz
+ }
+ if [ -s /tmp/jdk21.tar.gz ]; then
  tar -xzf /tmp/jdk21.tar.gz -C /opt/
- jdir=$(ls -d /opt/jdk-* /opt/OpenJDK* 2>/dev/null | head -1)
+ fi
+ fi
+ jdir=$(ls -d /opt/jdk-* /opt/OpenJDK* /opt/jdk21* /opt/Open*JDK* 2>/dev/null | head -1)
  if [ -n "$jdir" ]; then
  update-alternatives --install /usr/bin/java java "$jdir/bin/java" 2100 2>/dev/null || true
  update-alternatives --install /usr/bin/javac javac "$jdir/bin/javac" 2100 2>/dev/null || true
  echo "export JAVA_HOME=$jdir" > /etc/profile.d/jdk21.sh
  chmod 644 /etc/profile.d/jdk21.sh
- ok "二进制JDK21部署完成"
+ ok "JDK21 ($jdir) 部署完成"
  return
- fi
  fi
  warn "JDK自动安装失败，请手动部署OpenJDK21"
 }
@@ -710,11 +728,17 @@ install_maven() {
  setup_maven_mirror
  return
  fi
- info "安装 Maven3.9.9 华为云镜像"
+ info "安装 Maven3.9.9"
  local mvn_pkg="/tmp/maven.tar.gz"
  rm -f "$mvn_pkg"
+ # 本地 deps 优先
+ if [ -f "${DEPS_DIR}/apache-maven-3.9.9-bin.tar.gz" ]; then
+ info " -> 使用本地离线包: ${DEPS_DIR}/apache-maven-3.9.9-bin.tar.gz"
+ cp "${DEPS_DIR}/apache-maven-3.9.9-bin.tar.gz" "$mvn_pkg"
+ else
  curl -sL --connect-timeout 10 --max-time 120 "https://repo.huaweicloud.com/apache/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz" -o "$mvn_pkg" || \
  curl -sL --connect-timeout 10 --max-time 120 "https://dlcdn.apache.org/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz" -o "$mvn_pkg"
+ fi
  if [ -f "$mvn_pkg" ] && [ -s "$mvn_pkg" ]; then
  tar -xzf "$mvn_pkg" -C /opt/
  ln -sf /opt/apache-maven-3.9.9/bin/mvn /usr/local/bin/mvn

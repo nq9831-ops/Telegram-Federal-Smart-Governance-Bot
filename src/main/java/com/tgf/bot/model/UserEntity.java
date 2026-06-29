@@ -65,7 +65,6 @@ public class UserEntity {
 
     /** 是否为高级审核官（信任加权） */
     private boolean isReviewer = false;
-    private UserRole role = UserRole.USER;
     /** 种子用户（管理员保护，不受自动禁言影响） */
     private boolean trustedSeed = false;
     /** 被谁邀请来的 */
@@ -94,11 +93,6 @@ public class UserEntity {
      *   <li>ADMIN — 超级管理员，全部权限</li>
      * </ul>
      */
-    public enum UserRole {
-        USER, REVIEWER, MODERATOR, ADMIN
-    }
-
-
     public enum RiskLevel {
         SAFE, WATCH, DANGER, DEATH
     }

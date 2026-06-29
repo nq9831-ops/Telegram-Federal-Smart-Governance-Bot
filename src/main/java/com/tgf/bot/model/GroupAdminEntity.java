@@ -13,6 +13,8 @@ import java.time.LocalDateTime;
     @Index(name = "idx_ga_group", columnList = "groupId"),
     @Index(name = "idx_ga_user", columnList = "userId"),
     @Index(name = "idx_ga_active", columnList = "isActive")
+}, uniqueConstraints = {
+    @UniqueConstraint(name = "uk_ga_group_user", columnNames = {"groupId", "userId"})
 })
 public class GroupAdminEntity {
 

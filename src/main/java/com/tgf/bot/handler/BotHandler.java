@@ -10,8 +10,8 @@ import com.pengrad.telegrambot.model.request.ParseMode;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * BotHandler — Bot 命令处理器接口。
@@ -51,7 +51,7 @@ public interface BotHandler {
             int msgId = msg.message().messageId();
             TEMP_MSG_SCHEDULER.schedule(() -> {
                 try { bot.execute(new DeleteMessage(chatId, msgId)); } catch (Exception e) {
-                        Logger.getLogger("BotHandler").log(Level.WARNING, "Failed to delete temp msg: {0}", e.getMessage());
+                        LoggerFactory.getLogger("BotHandler").warn("Failed to delete temp msg: {}", e.getMessage());
                     }
             }, deleteAfterMs, TimeUnit.MILLISECONDS);
         }

@@ -69,33 +69,39 @@ tg-federal-bot/
 │
 ├── deploy/
 │   ├── install.sh                  # 一键离线部署脚本
+│   ├── download-deps.sh            # 离线依赖下载工具
+│   ├── deps/
+│   │   ├── apache-maven-3.9.9-bin.tar.gz  # Maven（已入库）
+│   │   ├── ACCC4CF8.asc                   # PostgreSQL GPG key
+│   │   ├── GPG-KEY-elasticsearch          # Elasticsearch GPG key
+│   │   └── .gitkeep                       # 目录占位
 │   ├── init.sql                    # 违规模板预设数据
 │   └── tg-federal-bot.service      # systemd 服务单元
 │
 ├── src/main/java/com/tgf/bot/
 │   ├── FederalBotApplication.java  # 启动入口
-│   ├── config/                     # 9 个配置类（CORS/AOP/Redisson/ES/Health等）
-│   ├── model/                      # 16 个数据模型（15 JPA + 1 ES）
+│   ├── config/                     # 12 个配置类（CORS/AOP/Redisson/ES/Health/ConcurrencyGuard等）
+│   ├── model/                      # 14 个数据模型（13 JPA + 1 ES）
 │   ├── repository/                 # 3 个 JPA 仓库
-│   ├── service/                    # 19 个业务服务
-│   ├── handler/                    # 6 个 Telegram 命令处理器
+│   ├── service/                    # 18 个业务服务
+│   ├── handler/                    # 7 个 Telegram 命令处理器
 │   ├── controller/                 # 2 个 REST 控制器
-│   └── scheduler/                  # 1 个定时调度器（5 个定时任务）
+│   └── scheduler/                  # 1 个定时调度器（7 个定时任务）
 │
 └── src/main/resources/
     ├── application.properties      # 应用配置（环境变量占位符）
     └── static/index.html           # Mini App 前端页面
 ```
 
-### 1.4 数据模型（15 张表）
+### 1.4 数据模型（14 张表）
 
 | 分类 | 实体 | 说明 |
 |------|------|------|
 | 用户体系 | User / Group / Bot / Proxy | 联邦身份主体 |
-| 安全体系 | ViolationTemplate / Ticket / AuditLog | 违规模板 + 工单 + 审计 |
-| 信用体系 | RatingRecord (ES) / RatingRule | 评分数据 + 规则版本 |
-| 协同体系 | GroupAdmin / UserLeave / Submission | 群管 + 离群 + 收录申请 |
-| 运营体系 | SystemConfig / VersionLog / FalsePositiveFeedback | 配置 + 版本 + 误报反馈 |
+| 安全体系 | ViolationTemplate / Ticket / AuditLog / FalsePositiveFeedback | 违规模板 + 工单 + 审计 + 误报反馈 |
+| 信用体系 | RatingRecord (ES) | 评分数据（Elasticsearch 存储） |
+| 协同体系 | GroupAdmin / UserLeave / Submission / Message | 群管 + 离群 + 收录申请 + 消息记录 |
+| 运营体系 | SystemConfig | 运行时动态配置 |
 
 ---
 
@@ -179,13 +185,46 @@ curl http://localhost:8080/api/system/status
 
 ### 3.2 传统部署
 
-#### 3.2.1 一键脚本部署
+#### 3.2.1 离线部署（推荐）
 
 ```bash
-# 如果上述 curl|bash 失败（网络限制），可以先在有 GitHub 账号的机器上 clone：
+# 1. 克隆项目到服务器
 git clone git@github.com:nq9831-ops/Telegram-Federal-Smart-Governance-Bot.git
 cd Telegram-Federal-Smart-Governance-Bot
-# 然后打包 scp 到服务器：
+
+# 2. 下载离线依赖包（JDK21 ~200MB + Mihomo ~10MB）
+#    服务器需要能访问 GitHub 和华为云镜像
+cd deploy
+bash download-deps.sh
+
+# 3. 执行离线安装
+sudo bash install.sh
+```
+
+> **💡 离线部署流程**：
+> 1. `download-deps.sh` 下载 JDK21、Maven 3.9.9、Mihomo（Clash Meta）到 `deploy/deps/`
+> 2. `install.sh` 优先使用 `deploy/deps/` 中的本地包，无需联网
+> 3. 支持 Ubuntu/Debian/CentOS，x86_64/ARM64 自动适配
+> 4. PostgreSQL 密码强校验（8位+禁止 postgres）
+> 5. 凭据分离：`application.properties`（600 权限）+ `application-public.properties`（644 权限）
+
+#### 3.2.2 在线一键部署
+
+```bash
+# 如果需要在线部署（联网下载依赖）
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/nq9831-ops/Telegram-Federal-Smart-Governance-Bot/main/deploy/install.sh)"
+```
+
+部署前准备：**Bot Token**、DeepSeek API Key（可选）、高强度 PG 密码（≥8位，允许特殊字符但需用单引号包裹）。
+
+#### 3.2.3 手动部署（scp 复制）
+
+```bash
+# 先在本地克隆
+cd Telegram-Federal-Smart-Governance-Bot
+# 运行依赖下载脚本（需要本地有网络）
+bash deploy/download-deps.sh
+# 打包并 scp 到服务器
 tar czf bot.tar.gz .
 scp bot.tar.gz root@服务器IP:/opt/
 ssh root@服务器IP
@@ -193,22 +232,7 @@ cd /opt && tar xzf bot.tar.gz && cd Telegram-Federal-Smart-Governance-Bot
 sudo bash deploy/install.sh
 ```
 
-> **💡 国内服务器推荐**：项目内置了 [install.sh](deploy/install.sh) 终极部署脚本，自动完成以下工作：
-> - 自动安装 **Clash Meta (kcla)** 本地 SOCKS5 代理，国内 VPS 直通 Telegram API
-> - 所有安装包从国内镜像（阿里云/华为云）下载，无需翻墙
-> - 架构自适应：Ubuntu/Debian/CentOS 全支持，x86_64/ARM64 自动适配
-> - PostgreSQL 密码强校验（8位+禁止 postgres），Docker JSON 合并模式
-> - 凭据分离：`application.properties`（600 权限）+ `application-public.properties`（644 权限）
-> 
-> ```bash
-> # 国内服务器一键部署（需准备 Clash 订阅链接）
-> sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/nq9831-ops/Telegram-Federal-Smart-Governance-Bot/main/deploy/install.sh)"
-> ```
-> 
-> 部署前准备：**Clash/V2ray 订阅链接**（必填）、Bot Token、DeepSeek API Key（可选）、高强度 PG 密码
-脚本会交互式询问配置项（Bot Token、DeepSeek Key、审核模式等），全过程 5-15 分钟自动完成。
-
-#### 3.2.2 环境要求
+#### 3.2.4 环境要求
 
 | 配置 | 最低 | 推荐 |
 |------|------|------|
@@ -290,7 +314,7 @@ server.port=8080
 spring.datasource.url=${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/tg_federal_bot}
 spring.datasource.username=${SPRING_DATASOURCE_USERNAME:postgres}
 spring.datasource.password=${SPRING_DATASOURCE_PASSWORD:postgres}
-spring.jpa.hibernate.ddl-auto=update
+spring.jpa.hibernate.ddl-auto=validate
 
 # Redis
 spring.data.redis.host=${SPRING_DATA_REDIS_HOST:localhost}
@@ -498,28 +522,17 @@ curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
 
 ### 国内服务器无法访问 Telegram API
 
-**推荐方案：使用内置一键部署脚本**
+**推荐方案：使用离线部署**
 
-`deploy/install.sh` 已集成 Clash Meta 代理自动安装，首次运行时会让你输入订阅链接，自动配置 SOCKS5 代理。详见 [3.2.1 一键脚本部署](#-321-一键脚本部署)。
+`deploy/download-deps.sh` 会下载必要的依赖包（JDK、Maven、Mihomo），`deploy/install.sh` 使用本地包进行离线安装。
 
-**手动配置 SOCKS5 代理（不依赖一键脚本时）**
+如果服务器必须通过代理才能访问 Telegram：
+1. 先手动配置代理，再运行 `download-deps.sh`
+2. 或者在有网络的机器上下载依赖，打包 scp 到服务器
 
-```bash
-# 测试代理连通性
-curl --socks5-hostname 127.0.0.1:7890 https://api.telegram.org
-```
+**Mihomo 代理部署（如服务器无外网）**
 
-然后在 `application.properties` 或环境变量中配置：
-```properties
-bot.proxy.enabled=true
-bot.proxy.socks5-host=127.0.0.1
-bot.proxy.socks5-port=7890
-```
-
-或者通过 Docker 环境变量：
-```bash
-BOT_PROXY_ENABLED=true BOT_PROXY_HOST=127.0.0.1 BOT_PROXY_PORT=7890
-```
+脚本内置了 Clash Meta (Mihomo) 自动安装。如果 `download-deps.sh` 已将 Mihomo 二进制下载到 `deploy/deps/`，安装脚本会自动使用本地包部署 SOCKS5 代理。
 ### ES 启动失败（内存不足）
 ```bash
 # 修改 ES JVM 配置：-Xms512m -Xmx512m
@@ -542,7 +555,9 @@ docker compose up -d app
 cd /opt/tg-federal-bot
 # 如果项目是 git clone 的
 git pull
-# 或如果项目是脚本自动下载的，重新运行脚本即可
+# 重新下载依赖（如有新版本）
+bash deploy/download-deps.sh
+# 重新安装
 sudo bash deploy/install.sh
 ```
 

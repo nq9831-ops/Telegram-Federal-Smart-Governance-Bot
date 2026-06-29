@@ -28,21 +28,14 @@ public class PrivateHandler implements BotHandler {
     private static final Logger log = LoggerFactory.getLogger(PrivateHandler.class);
 
     private final UserRepository userRepo;
-    private final CreditEngine creditEngine;
-    private final RankingEngine rankingEngine;
-    private final ConfigService configService;
     private final CaptchaService captchaService;
     private final SubmissionService submissionService;
     @Value("${bot.username:YourBot}")
     private String botUsername;
 
-    public PrivateHandler(UserRepository userRepo, CreditEngine creditEngine,
-                          RankingEngine rankingEngine, ConfigService configService,
+    public PrivateHandler(UserRepository userRepo,
                           CaptchaService captchaService, SubmissionService submissionService) {
         this.userRepo = userRepo;
-        this.creditEngine = creditEngine;
-        this.rankingEngine = rankingEngine;
-        this.configService = configService;
         this.captchaService = captchaService;
         this.submissionService = submissionService;
     }
@@ -343,7 +336,7 @@ public class PrivateHandler implements BotHandler {
         reply(bot, chatId, user.isOptOutBroadcast() ? "✅ 已退订系统公告。" : "✅ 已恢复接收系统公告。");
     }
 
-    /** 确保用户已注册，不存在则自动创建。 */
+    /** 确保用户已注册，不存在则自动创建。使用 INSERT ... ON CONFLICT DO NOTHING 防御并发。 */
     private UserEntity ensureUser(com.pengrad.telegrambot.model.User from) {
         long id = from.id();
         var opt = userRepo.findById(id);
@@ -357,13 +350,25 @@ public class PrivateHandler implements BotHandler {
             return u;
         }
 
-        // 新用户注册：初始信用分 100，默认中文
+        // 新用户注册：使用原生 INSERT 防并发重复
+        // （两个虚拟线程同时执行至此，第二个 insert 会失败但被忽略）
         UserEntity u = new UserEntity();
         u.setUserId(id);
         u.setUsername(from.username() != null ? from.username() : "");
         u.setCreditScore(100);
         u.setLang(from.languageCode() != null ? from.languageCode() : "zh");
-        userRepo.save(u);
+        try {
+            userRepo.save(u);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            // 另一个线程已经创建了该用户，重新查询即可
+            log.debug("Concurrent user registration detected for userId={}, retrying", id);
+            opt = userRepo.findById(id);
+            if (opt.isPresent()) {
+                return opt.get();
+            }
+            // 极低概率：第二次仍然失败，抛出自定义异常
+            throw new RuntimeException("Failed to register user " + id + ", please try again");
+        }
 
         log.info("New user registered: {} @{}", id, u.getUsername());
         return u;

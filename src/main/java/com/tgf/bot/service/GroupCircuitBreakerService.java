@@ -14,9 +14,32 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * GroupCircuitBreakerService — 群组级熔断服务。
- * 
+ *
  * 三级熔断层次：L1 群组级（QPS/违规率）、L2 用户级（跨群违规次数）、
- * L3 全局级（系统熔断器）。支持 DROP/SLOW/MUTE 等熔断动作。
+ * L3 全局级（{@link CircuitBreakerService}）。支持 DROP/SLOW/MUTE 等熔断动作。
+ *
+ * <p>熔断策略：</p>
+ * <ul>
+ *   <li>L1 群组级 — QPS > 5/s 或违规率 ≥30% 时熔断，5 分钟自动恢复</li>
+ *   <li>L2 用户级 — 跨群违规 ≥5 次/30min 时静默 10 分钟</li>
+ *   <li>L3 全局级 — DeepSeek 连续失败时降级为规则引擎</li>
+ * </ul>
+ *
+ * <p>滑动窗口：12 个 5 秒桶 = 60 秒窗口，记录消息数和违规数。</p>
+ *
+ * <p>依赖：</p>
+ * <ul>
+ *   <li>{@link GroupRepository} — 群组熔断状态持久化</li>
+ * </ul>
+ *
+ * <p>被引用：</p>
+ * <ul>
+ *   <li>{@link GroupHandler} — 每条消息到达时调用 check()</li>
+ *   <li>{@link MiniAppController} — API 层群组熔断状态查询</li>
+ *   <li>{@link AdminHandler} — 管理员手动恢复熔断</li>
+ *   <li>{@link BotScheduler} — 定期检查过期熔断自动恢复</li>
+ * </ul>
+ *
  * @since 1.0
  */
 @Service
@@ -49,11 +72,9 @@ public class GroupCircuitBreakerService {
     private final AtomicLong lastCleanup = new AtomicLong(System.currentTimeMillis());
 
     private final GroupRepository groupRepo;
-    private final CircuitBreakerService globalBreaker;
 
     public GroupCircuitBreakerService(
         GroupRepository groupRepo,
-        CircuitBreakerService globalBreaker,
         @Value("${breaker.group.max-qps:5}") int maxQpsPerGroup,
         @Value("${breaker.group.max-violation-rate:3000}") int maxViolationRate,
         @Value("${breaker.group.mute-seconds:300}") long groupMuteSeconds,
@@ -62,7 +83,6 @@ public class GroupCircuitBreakerService {
         @Value("${breaker.user.violation-limit:5}") int userViolationLimit
     ) {
         this.groupRepo = groupRepo;
-        this.globalBreaker = globalBreaker;
         this.maxQpsPerGroup = maxQpsPerGroup;
         this.maxViolationRate = maxViolationRate;
         this.groupMuteSeconds = groupMuteSeconds;
@@ -203,7 +223,14 @@ public class GroupCircuitBreakerService {
     /** 熔断整个群组 */
     private void breakGroup(Long chatId, String reason) {
         GroupEntity group = groupRepo.findById(chatId).orElse(null);
-        if (group == null) return;
+        if (group == null) {
+            // DB 中无此群记录（用户未发过消息），但仍有攻击流量入内存
+            // 只能打日志并启用内存级慢速模式：记到 groupWindows 中
+            SlidingWindow w = groupWindows.computeIfAbsent(chatId, k -> new SlidingWindow());
+            w.slowModeUntil = System.currentTimeMillis() + groupMuteSeconds * 1000L;
+            log.warn("🔴 Group {} (no DB record) circuit BREAK in memory: {}", chatId, reason);
+            return;
+        }
 
         group.setCircuitBroken(true);
         group.setCircuitReason(reason);
@@ -274,6 +301,7 @@ public class GroupCircuitBreakerService {
         private final int[] counts = new int[BUCKETS];
         private final int[] violationCounts = new int[BUCKETS];
         private long lastTick = System.currentTimeMillis();
+        volatile long slowModeUntil = 0; // 内存级慢速模式截止时间
 
         SlidingWindow() {
             long now = System.currentTimeMillis();

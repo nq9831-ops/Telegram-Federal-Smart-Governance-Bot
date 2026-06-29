@@ -15,9 +15,32 @@ import java.util.stream.Collectors;
 
 /**
  * AggregatedNotifier — 聚合通知服务。
- * 
+ *
  * 将零散告警/异动合并为 5 分钟窗口报告，
  * 避免高频通知轰炸管理员，支持按类型/群组/用户聚合统计。
+ *
+ * <p>通知类型：</p>
+ * <ul>
+ *   <li>CREDIT_ANOMALY — 信用分异动（±15 分以上）</li>
+ *   <li>GROUP_CIRCUIT — 群组熔断</li>
+ *   <li>USER_CIRCUIT — 用户熔断</li>
+ *   <li>TICKET_ESCALATED — 工单超时升级</li>
+ *   <li>DEATH_PENALTY — 死刑执行</li>
+ *   <li>BATCH_DAILY — 每日汇总</li>
+ * </ul>
+ *
+ * <p>依赖：</p>
+ * <ul>
+ *   <li>{@link TelegramBot} — 发送 Telegram 消息到管理员</li>
+ * </ul>
+ *
+ * <p>被引用：</p>
+ * <ul>
+ *   <li>{@link CreditEngine} — 信用分异动/死刑通知</li>
+ *   <li>{@link GroupCircuitBreakerService} — 群组熔断通知</li>
+ *   <li>{@link TicketService} — 工单超时升级通知</li>
+ * </ul>
+ *
  * @since 1.0
  */
 @Service
@@ -47,13 +70,14 @@ public class AggregatedNotifier {
 
     private final ConcurrentLinkedQueue<AlertEvent> alertQueue = new ConcurrentLinkedQueue<>();
 
-    // 可选：Telegram Bot（如果配置了管理员 Chat ID）
+    // Telegram Bot
     private final TelegramBot bot;
-    private final Long adminChatId;
+
+    @org.springframework.beans.factory.annotation.Value("${bot.admin-chat-id:0}")
+    private long adminChatId;
 
     public AggregatedNotifier(TelegramBot bot) {
         this.bot = bot;
-        this.adminChatId = null; // 从配置读取
     }
 
     /** 推入一条异动事件 */
@@ -139,24 +163,42 @@ public class AggregatedNotifier {
 
         String report = sb.toString();
 
-        // 发送到管理员
-        if (adminChatId != null) {
-            try {
-                bot.execute(new SendMessage(adminChatId, report));
-            } catch (Exception e) {
-                log.warn("Failed to send aggregated report: {}", e.getMessage());
+        // 发送到管理员（如果消息超长则分片）
+        if (adminChatId != 0L) {
+            int maxLen = 4096;
+            if (report.length() <= maxLen) {
+                try {
+                    bot.execute(new SendMessage(adminChatId, report));
+                } catch (Exception e) {
+                    log.warn("Failed to send aggregated report: {}", e.getMessage());
+                }
+            } else {
+                // 分片发送
+                int start = 0;
+                int part = 1;
+                while (start < report.length()) {
+                    int end = Math.min(start + maxLen, report.length());
+                    // 尽量在换行符处分片，避免截断英文单词
+                    if (end < report.length()) {
+                        int newlineBreak = report.lastIndexOf('\n', end);
+                        if (newlineBreak > start + maxLen / 2) {
+                            end = newlineBreak;
+                        }
+                    }
+                    String chunk = "(" + part + "/...)\n" + report.substring(start, end);
+                    try {
+                        bot.execute(new SendMessage(adminChatId, chunk));
+                    } catch (Exception e) {
+                        log.warn("Failed to send aggregated report part {}: {}", part, e.getMessage());
+                    }
+                    part++;
+                    start = end;
+                }
             }
         }
 
         // 日志记录
         log.info("Aggregated report flushed: {} events in {} types",
             batch.size(), grouped.size());
-
-        // 持久化到 PG（可选，保留历史）
-        saveReportToDb(batch);
-    }
-
-    private void saveReportToDb(List<AlertEvent> batch) {
-        // 暂不实现：后续可以写到 system_version_log 或 audit_log
     }
 }

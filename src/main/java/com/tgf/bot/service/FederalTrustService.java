@@ -7,18 +7,39 @@ import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.time.LocalDateTime;
-import java.util.List;
 
 /**
  * FederalTrustService — 联邦信任与黑产防刷服务。
- * 
+ *
  * 提供动态全局禁言阈值、黑产刷分检测、账号年龄约束等能力，
  * 防止批量小号、互相邀请、挂机养号等黑产行为。
+ *
+ * <p>核心功能：</p>
+ * <ul>
+ *   <li>动态禁言阈值（35-70 自适应）— 根据信用分/账号年龄/审核官身份/违规记录计算</li>
+ *   <li>加分折扣（黑产防刷）— 新号 3 天内 50%，7 天内 70%，14 天内 90%</li>
+ *   <li>每日奖励上限（默认 5 分）— 防止无限刷分</li>
+ *   <li>同 IP 批量注册检测（7 天内 ≥3 个同 IP 账号）</li>
+ *   <li>邀请链异常检测（A→B→C 链式注册）</li>
+ *   <li>种子用户保护（管理员标记的安全用户，永不自动禁言）</li>
+ * </ul>
+ *
+ * <p>依赖：</p>
+ * <ul>
+ *   <li>{@link UserRepository} — 用户数据查询</li>
+ *   <li>{@link AuditLogEntity} — 违规记录统计</li>
+ * </ul>
+ *
+ * <p>被引用：</p>
+ * <ul>
+ *   <li>{@link CreditEngine} — 加分时调用 applyRewardCredit() 折扣</li>
+ *   <li>{@link GroupHandler} — 消息审核时调用 shouldMute() 判断禁言</li>
+ *   <li>{@link ColdStartService} — 冷启动期调用 shouldMute() 判断全局禁言</li>
+ * </ul>
+ *
  * @since 1.0
  */
 @Service
@@ -30,17 +51,16 @@ public class FederalTrustService {
     private EntityManager em;
 
     private final UserRepository userRepo;
-    private final AggregatedNotifier notifier;
 
     @Value("${credit.daily-reward-cap:5}")
     private int dailyRewardCap;
 
-    @Autowired(required = false)
-    private org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    // 注：registrationIp 在 Telegram Bot 场景下无法获取（Telegram 推送的 Update 不含客户端 IP）
+    // hasSuspiciousRegistration() 依赖 registrationIp 字段，因此在纯 Bot 部署模式下该检测功能不生效
+    // 如需启用，需在 MiniApp HTTP 入口处通过 X-Forwarded-For 获取 IP 并调用 user.setRegistrationIp()
 
-    public FederalTrustService(UserRepository userRepo, AggregatedNotifier notifier) {
+    public FederalTrustService(UserRepository userRepo) {
         this.userRepo = userRepo;
-        this.notifier = notifier;
     }
 
     // ==========================================
@@ -246,8 +266,8 @@ public class FederalTrustService {
     private boolean isUserActive(long userId) {
         UserEntity user = userRepo.findById(userId).orElse(null);
         if (user == null) return false;
-        return user.getCreditScore() > 100 || user.getCreatedAt() != null
-            && java.time.Duration.between(user.getCreatedAt(), LocalDateTime.now()).toDays() >= 3;
+        return user.getCreditScore() >= 100 || (user.getCreatedAt() != null
+            && java.time.Duration.between(user.getCreatedAt(), LocalDateTime.now()).toDays() >= 3);
     }
 
     /**

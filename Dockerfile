@@ -32,4 +32,5 @@ USER tgf
 
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-jar", "app.jar"]
+# 支持通过 JAVA_OPTS 环境变量注入 JVM 参数（内存、GC 等）
+ENTRYPOINT ["sh", "-c", "java ${JAVA_OPTS:--Xms512m -Xmx1024m} -jar app.jar"]

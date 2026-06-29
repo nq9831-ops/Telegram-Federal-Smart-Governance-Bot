@@ -2,9 +2,27 @@ package com.tgf.bot.service;
 
 /**
  * DeepSeekResult — AI 分类结果 DTO。
- * 
- * DeepSeek 内容分类判定的结果封装，包含类别、置信度、
- * 关键词及判断理由，提供便捷的违规判定辅助方法。
+ *
+ * {@link ContentModerationService} 的 DeepSeek 内容分类判定的结果封装，
+ * 包含类别、置信度、关键词及判断理由，提供便捷的违规判定辅助方法。
+ *
+ * <p>类别枚举：</p>
+ * <ul>
+ *   <li>正常 — 无违规</li>
+ *   <li>诈骗 — 死刑级别，零容忍</li>
+ *   <li>政治/煽动/分裂 — 死刑级别，需人工复核</li>
+ *   <li>色情 — 安全港豁免（NSFW 群组），跨域扣 30 分</li>
+ *   <li>赌博 — 安全港豁免（GAMBLING 群组），跨域扣 20 分</li>
+ *   <li>普通广告 — 认证广告商豁免（有配额），普通用户扣 5-10 分</li>
+ * </ul>
+ *
+ * <p>被引用：</p>
+ * <ul>
+ *   <li>{@link GroupHandler} — 消息审核时使用判定结果</li>
+ *   <li>{@link PenaltyEngine} — 根据类别执行处罚</li>
+ *   <li>{@link ContentModerationService} — 生成分类结果</li>
+ * </ul>
+ *
  * @since 1.0
  */
 public class DeepSeekResult {

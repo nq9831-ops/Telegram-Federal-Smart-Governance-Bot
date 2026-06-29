@@ -46,9 +46,28 @@ public class ElasticsearchHealthIndicator implements HealthIndicator {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() == 200) {
+                // 解析响应 JSON 中的 status 字段（green/yellow/red）
+                String body = response.body();
+                String clusterStatus = "unknown";
+                if (body.contains("\"status\":\"red\"")) {
+                    clusterStatus = "red";
+                } else if (body.contains("\"status\":\"yellow\"")) {
+                    clusterStatus = "yellow";
+                } else if (body.contains("\"status\":\"green\"")) {
+                    clusterStatus = "green";
+                }
+
+                if ("red".equals(clusterStatus)) {
+                    return Health.down()
+                            .withDetail("cluster", esUrl)
+                            .withDetail("status", "red")
+                            .withDetail("message", "ES 集群状态为 RED，数据不可用")
+                            .build();
+                }
+
                 return Health.up()
                         .withDetail("cluster", esUrl)
-                        .withDetail("status", "green/yellow")
+                        .withDetail("status", clusterStatus)
                         .build();
             } else {
                 return Health.down()

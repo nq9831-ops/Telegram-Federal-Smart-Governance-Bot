@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 
@@ -32,7 +33,6 @@ public class MiniAppController {
     private EntityManager em;
 
     private final UserRepository userRepo;
-    private final CreditEngine creditEngine;
     private final RankingEngine rankingEngine;
     private final TicketService ticketService;
     private final CaptchaService captchaService;
@@ -46,7 +46,7 @@ public class MiniAppController {
     @Value("${spring.application.name:tg-federal-bot}")
     private String appVersion;
 
-    public MiniAppController(UserRepository userRepo, CreditEngine creditEngine,
+    public MiniAppController(UserRepository userRepo,
                              RankingEngine rankingEngine, TicketService ticketService,
                              CaptchaService captchaService, CircuitBreakerService circuitBreaker,
                              ColdStartService coldStartService,
@@ -54,7 +54,6 @@ public class MiniAppController {
                              ApiAuthAspect apiAuth,
                              GroupCircuitBreakerService groupBreaker) {
         this.userRepo = userRepo;
-        this.creditEngine = creditEngine;
         this.rankingEngine = rankingEngine;
         this.ticketService = ticketService;
         this.captchaService = captchaService;
@@ -73,8 +72,11 @@ public class MiniAppController {
     ) {
         // 鉴权：只能查看自己的信息，或管理员可查看所有
         boolean isAdmin = apiAuth.checkAdmin();
-        boolean isSelf = headerUserId != null && !headerUserId.isBlank()
-            && Long.parseLong(headerUserId) == userId;
+        boolean isSelf = false;
+        try {
+            isSelf = headerUserId != null && !headerUserId.isBlank()
+                && Long.parseLong(headerUserId) == userId;
+        } catch (NumberFormatException ignored) {}
 
         if (!isAdmin && !isSelf) {
             // 匿名访问：只返回公开信息
@@ -154,19 +156,36 @@ public class MiniAppController {
         Map<String, Object> resp = new LinkedHashMap<>();
 
         // 简化搜索：直接从ES拉或者从group表查询
-        // 这里模拟返回，真实环境改为ES search
+        // 转义 LIKE 通配符（% 和 _），防止用户注入搜索模式
+        String escapedKeyword = keyword.replace("%", "\\%").replace("_", "\\_");
+        String escapedCountry = country.replace("%", "\\%").replace("_", "\\_");
+
+        // 先查总数（用于分页）
+        long total = em.createQuery(
+            "SELECT COUNT(g) FROM GroupEntity g WHERE " +
+            "(:keyword = '' OR g.title LIKE :kw ESCAPE '\\' OR g.description LIKE :dkw ESCAPE '\\') " +
+            "AND (:country = '' OR g.username LIKE :c ESCAPE '\\') " +
+            "AND g.isActive = true",
+            Long.class)
+            .setParameter("keyword", keyword)
+            .setParameter("kw", "%" + escapedKeyword + "%")
+            .setParameter("dkw", "%" + escapedKeyword + "%")
+            .setParameter("country", country)
+            .setParameter("c", country.isEmpty() ? "%" : "%" + escapedCountry + "%")
+            .getSingleResult();
+
         var groups = em.createQuery(
             "FROM GroupEntity g WHERE " +
-            "(:keyword = '' OR g.title LIKE :kw OR g.description LIKE :dkw) " +
-            "AND (:country = '' OR g.username LIKE :c) " +
+            "(:keyword = '' OR g.title LIKE :kw ESCAPE '\\' OR g.description LIKE :dkw ESCAPE '\\') " +
+            "AND (:country = '' OR g.username LIKE :c ESCAPE '\\') " +
             "AND g.isActive = true " +
             "ORDER BY g.memberCount DESC",
             com.tgf.bot.model.GroupEntity.class)
             .setParameter("keyword", keyword)
-            .setParameter("kw", "%" + keyword + "%")
-            .setParameter("dkw", "%" + keyword + "%")
+            .setParameter("kw", "%" + escapedKeyword + "%")
+            .setParameter("dkw", "%" + escapedKeyword + "%")
             .setParameter("country", country)
-            .setParameter("c", country.isEmpty() ? "%" : "%" + country + "%")
+            .setParameter("c", country.isEmpty() ? "%" : "%" + escapedCountry + "%")
             .setMaxResults(size)
             .setFirstResult((page - 1) * size)
             .getResultList();
@@ -188,7 +207,7 @@ public class MiniAppController {
         }
 
         resp.put("records", records);
-        resp.put("total", (long) records.size());
+        resp.put("total", total);
         resp.put("page", page);
         resp.put("size", size);
         return resp;
@@ -238,7 +257,6 @@ public class MiniAppController {
     @PostMapping("/rating/{uuid}")
     public Map<String, Object> rate(
         @PathVariable String uuid,
-        @RequestParam long userId,
         @RequestParam int score,
         @RequestHeader(value = "X-User-Id", required = false) String headerUserId
     ) {
@@ -246,17 +264,77 @@ public class MiniAppController {
             return Map.of("success", false, "message", "评分必须在1~5星之间");
         }
 
-        // 鉴权：只能以自己的身份评分
-        boolean isAdmin = apiAuth.checkAdmin();
-        boolean isSelf = headerUserId != null && !headerUserId.isBlank()
-            && Long.parseLong(headerUserId) == userId;
-
-        if (!isAdmin && !isSelf) {
-            return Map.of("success", false, "message", "无权限：只能以自己的身份评分");
+        // userId 从 header 获取，防止伪造
+        if (headerUserId == null || headerUserId.isBlank()) {
+            return Map.of("success", false, "message", "缺少 X-User-Id 头");
+        }
+        long userId;
+        try {
+            userId = Long.parseLong(headerUserId);
+        } catch (NumberFormatException e) {
+            return Map.of("success", false, "message", "X-User-Id 格式错误");
         }
 
-        // 简化: 只返回成功（真实环境写ES）
-        return Map.of("success", true, "message", "评分成功");
+        // 管理员可以代评分，普通用户只能给自己评分（userId 已从 header 获取，天然一致）
+        boolean isAdmin = apiAuth.checkAdmin();
+
+        // entityType 由路径确定：uuid 传的是 "group"/"bot"/"proxy"/"user" + ":" + entityId 组合
+        int entityType = 1; // 默认=群组(1)
+        Long entityId;
+        try {
+            if (uuid != null && uuid.contains(":")) {
+                String[] parts = uuid.split(":", 2);
+                entityType = switch (parts[0].toLowerCase()) {
+                    case "user" -> 4;
+                    case "group" -> 1;
+                    case "bot" -> 3;
+                    case "proxy" -> 5;
+                    default -> 1;
+                };
+                entityId = Long.parseLong(parts[1]);
+            } else {
+                entityId = Long.parseLong(uuid);
+            }
+        } catch (NumberFormatException e) {
+            return Map.of("success", false, "message", "无效的实体 ID");
+        }
+
+        var result = ratingService.rate(entityType, entityId, userId, score, "", "", "");
+        boolean ok = result.success();
+        if (ok) {
+            // 触发排行榜更新（异步，不阻塞返回）
+            updateRankingForRating(entityType, entityId);
+            return Map.of("success", true, "message", "评分成功");
+        } else {
+            return Map.of("success", false, "message", "评分失败：可能频率限制或验证码错误");
+        }
+    }
+
+    private void updateRankingForRating(int entityType, Long entityId) {
+        // 异步触发对应实体的排行分更新
+        try {
+            switch (entityType) {
+                case 4 -> { // USER
+                    var u = userRepo.findById(entityId);
+                    u.ifPresent(user -> rankingEngine.updateUserScore(user.getUserId(), user.getCreditScore()));
+                }
+                case 1 -> { // GROUP
+                    var g = em.find(com.tgf.bot.model.GroupEntity.class, entityId);
+                    if (g != null) rankingEngine.updateGroupScore(g.getGroupId(), g.getEnvironmentScore());
+                }
+                case 3 -> { // BOT
+                    var b = em.find(com.tgf.bot.model.BotEntity.class, entityId);
+                    if (b != null) rankingEngine.updateBotScore(b.getBotId(), 0);
+                }
+                case 5 -> { // PROXY
+                    var p = em.find(com.tgf.bot.model.ProxyEntity.class, entityId);
+                    if (p != null) rankingEngine.updateProxyScore(p.getId(), p.getProxyCreditScore());
+                }
+                default -> {}
+            }
+        } catch (Exception e) {
+            log.debug("Ranking update after rating failed: {}", e.getMessage());
+        }
     }
 
     @GetMapping("/ranking/{type}")
@@ -369,8 +447,11 @@ public class MiniAppController {
     ) {
         // 鉴权：只能查看自己的信用记录，或管理员可查看所有
         boolean isAdmin = apiAuth.checkAdmin();
-        boolean isSelf = headerUserId != null && !headerUserId.isBlank()
-            && Long.parseLong(headerUserId) == userId;
+        boolean isSelf = false;
+        try {
+            isSelf = headerUserId != null && !headerUserId.isBlank()
+                && Long.parseLong(headerUserId) == userId;
+        } catch (NumberFormatException ignored) {}
 
         if (!isAdmin && !isSelf) {
             return Map.of("error", "无权限查看他人信用记录");
@@ -386,14 +467,14 @@ public class MiniAppController {
         resp.put("can_report", user.getCreditScore() >= 20);
 
         // 最近10条信用变更记录
-        var logs = em.createQuery(
-            "FROM AuditLogEntity WHERE targetUserId = :uid ORDER BY createdAt DESC")
+        List<AuditLogEntity> logs = em.createQuery(
+            "FROM AuditLogEntity WHERE targetUserId = :uid ORDER BY createdAt DESC", AuditLogEntity.class)
             .setParameter("uid", userId)
             .setMaxResults(10)
             .getResultList();
 
         List<Map<String, Object>> history = new ArrayList<>();
-        for (var l : (List<AuditLogEntity>) logs) {
+        for (var l : logs) {
             Map<String, Object> h = new LinkedHashMap<>();
             h.put("action", l.getActionType());
             h.put("change", l.getAfterValue() - l.getBeforeValue());
@@ -436,6 +517,7 @@ public class MiniAppController {
     // ============================
 
     @PostMapping("/submission/submit")
+    @Transactional
     public Map<String, Object> submitSubmission(
         @RequestParam String targetType,
         @RequestParam String title,
@@ -453,8 +535,11 @@ public class MiniAppController {
     ) {
         // 身份校验：userId 必须与头信息一致，或管理员 Token 跳过
         boolean isAdmin = apiAuth.checkAdmin();
-        boolean isSelf = headerUserId != null && !headerUserId.isBlank()
-            && Long.parseLong(headerUserId) == userId;
+        boolean isSelf = false;
+        try {
+            isSelf = headerUserId != null && !headerUserId.isBlank()
+                && Long.parseLong(headerUserId) == userId;
+        } catch (NumberFormatException ignored) {}
 
         if (!isAdmin && !isSelf) {
             return Map.of("success", false, "message", "身份验证失败：请使用 X-User-Id 头验证身份");
@@ -543,6 +628,7 @@ public class MiniAppController {
     }
 
     @PostMapping("/submission/approve")
+    @Transactional
     public Map<String, Object> approveSubmission(
         @RequestParam Long submissionId,
         @RequestParam Long reviewerId,
@@ -554,6 +640,7 @@ public class MiniAppController {
     }
 
     @PostMapping("/submission/reject")
+    @Transactional
     public Map<String, Object> rejectSubmission(
         @RequestParam Long submissionId,
         @RequestParam Long reviewerId,

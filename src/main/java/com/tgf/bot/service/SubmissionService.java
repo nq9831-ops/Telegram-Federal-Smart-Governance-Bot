@@ -14,9 +14,38 @@ import java.util.*;
 
 /**
  * SubmissionService — 收录提交服务。
- * 
- * 用户通过命令或 Mini App 提交群组/机器人/代理信息申请纳入联盟索引，
+ *
+ * 用户通过命令或 {@link MiniAppController} 提交群组/机器人/代理信息申请纳入联盟索引，
  * 管理员审核通过后自动创建对应收录实体。
+ *
+ * <p>提交流程：</p>
+ * <ol>
+ *   <li>参数验证 — 类型/名称/验证码</li>
+ *   <li>频率限制 — 同用户冷却期（默认 60 分钟）</li>
+ *   <li>每日限制 — 同用户每日上限（默认 5 次）</li>
+ *   <li>信用分门槛 — ≥30 分才能提交</li>
+ *   <li>重复检查 — 同类型同 ID 不可重复提交</li>
+ *   <li>创建提交记录 + 审核工单</li>
+ * </ol>
+ *
+ * <p>依赖：</p>
+ * <ul>
+ *   <li>{@link TicketService} — 审核工单生成</li>
+ *   <li>{@link CaptchaService} — 验证码校验</li>
+ *   <li>{@link EntityManager} — JPA 数据持久化</li>
+ *   <li>{@link SubmissionEntity} — 提交记录实体</li>
+ *   <li>{@link GroupEntity} — 群组收录实体</li>
+ *   <li>{@link BotEntity} — 机器人收录实体</li>
+ *   <li>{@link ProxyEntity} — 代理收录实体</li>
+ * </ul>
+ *
+ * <p>被引用：</p>
+ * <ul>
+ *   <li>{@link MiniAppController} — API 层提交/查询/审核</li>
+ *   <li>{@link PrivateHandler} — 私聊命令提交收录</li>
+ *   <li>{@link AdminHandler} — 管理员审核收录</li>
+ * </ul>
+ *
  * @since 1.0
  */
 @Service
@@ -79,7 +108,6 @@ public class SubmissionService {
         }
 
         // 频率限制
-        long now = System.currentTimeMillis();
         LocalDateTime since = LocalDateTime.now().minusMinutes(cooldownMinutes);
         long recentCount = em.createQuery(
             "SELECT COUNT(s) FROM SubmissionEntity s WHERE s.submitterId = :uid AND s.createdAt > :since",
@@ -194,12 +222,23 @@ public class SubmissionService {
         // 创建收录实体
         switch (targetType) {
             case "group" -> {
-                GroupEntity ge = new GroupEntity();
+                long gid;
                 try {
-                    ge.setGroupId(Long.parseLong(sub.getTargetId()));
+                    gid = Long.parseLong(sub.getTargetId());
                 } catch (NumberFormatException e) {
                     return "群组ID格式无效";
                 }
+                // 防重复：已收录的群组不重复创建
+                GroupEntity existing = em.find(GroupEntity.class, gid);
+                if (existing != null) {
+                    sub.setStatus("APPROVED");
+                    sub.setReviewerId(reviewerId);
+                    sub.setReviewedAt(LocalDateTime.now());
+                    sub.setReviewComment("群组已存在，跳过创建");
+                    return "群组已存在收录，已标记为通过";
+                }
+                GroupEntity ge = new GroupEntity();
+                ge.setGroupId(gid);
                 ge.setTitle(sub.getTitle());
                 ge.setInviteLink(sub.getInviteLink());
                 if (sub.getGroupLabel() != null && !sub.getGroupLabel().isEmpty()) {
@@ -213,12 +252,22 @@ public class SubmissionService {
                 log.info("Group created from submission: id={}", ge.getGroupId());
             }
             case "bot" -> {
-                BotEntity be = new BotEntity();
+                long bid;
                 try {
-                    be.setBotId(Long.parseLong(sub.getTargetId()));
+                    bid = Long.parseLong(sub.getTargetId());
                 } catch (NumberFormatException e) {
                     return "机器人ID格式无效";
                 }
+                BotEntity existing = em.find(BotEntity.class, bid);
+                if (existing != null) {
+                    sub.setStatus("APPROVED");
+                    sub.setReviewerId(reviewerId);
+                    sub.setReviewedAt(LocalDateTime.now());
+                    sub.setReviewComment("机器人已存在，跳过创建");
+                    return "机器人已存在收录，已标记为通过";
+                }
+                BotEntity be = new BotEntity();
+                be.setBotId(bid);
                 be.setBotName(sub.getTitle());
                 be.setBotUsername(sub.getContact() != null ? sub.getContact() : sub.getTitle());
                 be.setBotCreditScore(100);
@@ -270,7 +319,7 @@ public class SubmissionService {
         sub.setReviewComment(reason != null ? reason : "驳回");
 
         if (sub.getTicketId() != null) {
-            ticketService.punishTicket(sub.getTicketId(), reviewerId, "收录审核驳回: " + reason);
+            ticketService.closeTicket(sub.getTicketId(), reviewerId, "收录审核驳回: " + reason);
         }
 
         log.info("Submission rejected: id={} reason={}", submissionId, reason);

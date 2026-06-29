@@ -6,10 +6,18 @@ After=network.target postgresql.service redis-server.service
 Type=simple
 User=www-data
 WorkingDirectory=/opt/tg-federal-bot
-ExecStart=/usr/bin/java -jar /opt/tg-federal-bot/tg-federal-bot.jar
+EnvironmentFile=-/opt/tg-federal-bot/.env
+Environment="JAVA_OPTS=-Xms512m -Xmx1024m"
+ExecStart=/usr/bin/java ${JAVA_OPTS} -jar /opt/tg-federal-bot/tg-federal-bot.jar
 Restart=always
 RestartSec=10
 LimitNOFILE=65536
+
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/tg-federal-bot/logs
 
 [Install]
 WantedBy=multi-user.target

@@ -30,7 +30,6 @@ public class ReviewHandler implements BotHandler {
 
         private final TicketService ticketService;
     private final FalsePositiveService falsePositiveService;
-    private final TelegramBot bot;
 
     @Value("${bot.creator:0}")
     private String creatorIdsStr;
@@ -39,19 +38,18 @@ public class ReviewHandler implements BotHandler {
     private String reviewerIdsStr;
 
 
-    public ReviewHandler(TicketService ticketService, FalsePositiveService falsePositiveService, TelegramBot bot) {
+    public ReviewHandler(TicketService ticketService, FalsePositiveService falsePositiveService) {
         this.ticketService = ticketService;
         this.falsePositiveService = falsePositiveService;
-        this.bot = bot;
     }
 
     @Override
     public boolean canHandle(Update update) {
         Message msg = update.message();
         if (msg == null || msg.text() == null) return false;
+        // 只在私聊中处理 /review 命令，避免与 GroupHandler 冲突
+        if (msg.chat().type() != com.pengrad.telegrambot.model.Chat.Type.Private) return false;
         String text = msg.text().trim();
-
-        // 只有 /review 开头的命令
         return text.startsWith("/review") || text.startsWith("/review ");
     }
 
@@ -163,6 +161,7 @@ public class ReviewHandler implements BotHandler {
             return;
         }
 
+        String content = ticket.getContent() != null ? ticket.getContent() : "";
         String detail = """
             📋 工单 #%d
             
@@ -185,7 +184,7 @@ public class ReviewHandler implements BotHandler {
                 ticket.getTicketId(), ticket.getTicketType(), ticket.getStatus(),
                 ticket.getPriority(), ticket.getSubmitterId(), ticket.getTargetUserId(),
                 ticket.getRelatedGroupId(),
-                ticket.getContent() != null ? ticket.getContent().substring(0, Math.min(200, ticket.getContent().length())) : "无",
+                content.length() > 200 ? content.substring(0, 200) : content,
                 ticket.getDeadlineAt(), ticket.getEscalationLevel(),
                 ticket.isColdStart() ? "是" : "否",
                 ticket.getCreatedAt()
@@ -239,10 +238,14 @@ public class ReviewHandler implements BotHandler {
         String comment = parts.length >= 4 ? String.join(" ", Arrays.copyOfRange(parts, 3, parts.length)) : "人工裁定违规";
 
         var ticket = ticketService.getTicket(id);
+        if (ticket == null) {
+            reply(bot, chatId, "❌ 工单不存在");
+            return;
+        }
         ticketService.punishTicket(id, reviewerId, comment);
 
         // 私信通知用户
-        if (ticket != null) {
+        {
             try {
                 String notify = "❌ 审核结果：你的工单 #" + id + " 已裁定违规";
                 bot.execute(new com.pengrad.telegrambot.request.SendMessage(ticket.getSubmitterId(), notify));
@@ -286,15 +289,24 @@ public class ReviewHandler implements BotHandler {
     }
 
     private boolean isReviewer(long userId) {
-        if (creatorIdsStr != null) {
-            for (String s : creatorIdsStr.split(",")) {
-                if (Long.parseLong(s.trim()) == userId) return true;
-            }
+        if (creatorIdsStr == null || creatorIdsStr.isBlank()) {
+            // 未配置超级管理员时，仅检查审核官列表
+            return checkReviewerIds(userId);
         }
-        if (reviewerIdsStr != null && !reviewerIdsStr.isBlank()) {
-            for (String s : reviewerIdsStr.split(",")) {
-                if (Long.parseLong(s.trim()) == userId) return true;
-            }
+        for (String s : creatorIdsStr.split(",")) {
+            String trimmed = s.trim();
+            if (trimmed.isEmpty()) continue;
+            if (Long.parseLong(trimmed) == userId) return true;
+        }
+        return checkReviewerIds(userId);
+    }
+
+    private boolean checkReviewerIds(long userId) {
+        if (reviewerIdsStr == null || reviewerIdsStr.isBlank()) return false;
+        for (String s : reviewerIdsStr.split(",")) {
+            String trimmed = s.trim();
+            if (trimmed.isEmpty()) continue;
+            if (Long.parseLong(trimmed) == userId) return true;
         }
         return false;
     }

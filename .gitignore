@@ -6,3 +6,4 @@ target/
 .idea/
 .env
 logs/
+.rivet/

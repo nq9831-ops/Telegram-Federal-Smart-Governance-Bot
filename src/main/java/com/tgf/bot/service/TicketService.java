@@ -13,9 +13,47 @@ import java.util.List;
 
 /**
  * TicketService — 工单服务。
- * 
+ *
  * 管理死罪复核、标签申请、认证广告商、普通申诉等审核流程，
  * 含 SLA 超时自动升级机制。
+ *
+ * <p>工单类型与 SLA：</p>
+ * <ul>
+ *   <li>death_review（死罪复核）— 优先级 2，30 分钟 SLA</li>
+ *   <li>label_apply（标签申请）— 优先级 0，24 小时 SLA</li>
+ *   <li>ad_apply（广告认证）— 优先级 0，48 小时 SLA</li>
+ *   <li>appeal（申诉）— 优先级 0，72 小时 SLA</li>
+ *   <li>contact_admin（联系管理员）— 优先级 0，7 天 SLA</li>
+ *   <li>submission_review（收录审核）— 优先级 0，24 小时 SLA</li>
+ *   <li>pending_punish（冷启动期处罚）— 优先级 1，24 小时 SLA</li>
+ * </ul>
+ *
+ * <p>SLA 升级机制：</p>
+ * <ul>
+ *   <li>超时 1 倍 → 催办（escalationLevel 1）</li>
+ *   <li>超时 2 倍 → 升级至高级审核官（escalationLevel 2）</li>
+ *   <li>超时 3 倍 → 推送至超级管理员（escalationLevel 3）</li>
+ * </ul>
+ *
+ * <p>依赖：</p>
+ * <ul>
+ *   <li>{@link EntityManager} — JPA 数据持久化</li>
+ *   <li>{@link TicketEntity} — 工单实体</li>
+ * </ul>
+ *
+ * <p>被引用：</p>
+ * <ul>
+ *   <li>{@link CreditEngine} — 异动告警工单生成</li>
+ *   <li>{@link PenaltyEngine} — 死罪复核工单生成</li>
+ *   <li>{@link GroupManagementService} — 标签申请工单</li>
+ *   <li>{@link SubmissionService} — 收录审核工单</li>
+ *   <li>{@link ColdStartService} — 冷启动期处罚工单</li>
+ *   <li>{@link MemberUpdateHandler} — 入群验证失败告警工单</li>
+ *   <li>{@link MiniAppController} — API 层审核操作</li>
+ *   <li>{@link ReviewHandler} — 审核官命令操作</li>
+ *   <li>{@link BotScheduler} — SLA 超时检查</li>
+ * </ul>
+ *
  * @since 1.0
  */
 @Service
@@ -106,6 +144,18 @@ public class TicketService {
         ticket.setReviewedAt(LocalDateTime.now());
         ticket.setReviewComment(comment);
         log.info("Ticket passed: id={} reviewer={}", ticketId, reviewerId);
+    }
+
+    @Transactional
+    public void closeTicket(Long ticketId, Long reviewerId, String comment) {
+        var ticket = em.find(TicketEntity.class, ticketId);
+        if (ticket == null) return;
+
+        ticket.setStatus("CLOSED");
+        ticket.setReviewerId(reviewerId);
+        ticket.setReviewedAt(LocalDateTime.now());
+        ticket.setReviewComment(comment);
+        log.info("Ticket closed: id={} reviewer={}", ticketId, reviewerId);
     }
 
     @Transactional

@@ -41,8 +41,6 @@ public class BotPollingRunner {
     @Value("${bot.polling.limit:100}")
     private int pollLimit;
 
-    private volatile boolean running = false;
-
     public BotPollingRunner(TelegramBot bot, List<BotHandler> handlers) {
         this.bot = bot;
         this.handlers = handlers;
@@ -56,7 +54,6 @@ public class BotPollingRunner {
                 .limit(pollLimit)
                 .timeout(pollTimeoutSec);
 
-        running = true;
         bot.setUpdatesListener(updates -> {
             try {
                 for (Update update : updates) {
@@ -87,7 +84,6 @@ public class BotPollingRunner {
     @PreDestroy
     public void stop() {
         log.info("Stopping Bot LongPolling...");
-        running = false;
         bot.removeGetUpdatesListener();
     }
 }

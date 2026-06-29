@@ -16,8 +16,35 @@ import java.util.List;
 
 /**
  * GroupManagementService — 群组管理服务。
- * 
+ *
  * 负责标签审计、管理员同步、死罪群组处置等群组管理功能。
+ *
+ * <p>核心功能：</p>
+ * <ul>
+ *   <li>标签申请 — 群主申请 NSFW/GAMBLING 标签，生成审核工单</li>
+ *   <li>标签合规审计 — 采样检查标签内容匹配率，低于 60% 触发违规</li>
+ *   <li>三级阶梯惩罚 — 第 1 次警告，第 2 次最后警告，第 3 次清除收录</li>
+ *   <li>安全港死罪处置 — 累计 3 条死罪自动撤销标签，群主扣 30 分</li>
+ *   <li>管理员同步 — 同步 Telegram 群组管理员列表</li>
+ *   <li>群规设置 — 更新群组描述</li>
+ *   <li>退出群组 — 群主主动退出，7 天内不可重新接入</li>
+ * </ul>
+ *
+ * <p>依赖：</p>
+ * <ul>
+ *   <li>{@link GroupRepository} — 群组数据持久化</li>
+ *   <li>{@link UserRepository} — 用户数据查询</li>
+ *   <li>{@link CreditEngine} — 标签违规连带扣分</li>
+ *   <li>{@link TicketService} — 标签申请工单生成</li>
+ * </ul>
+ *
+ * <p>被引用：</p>
+ * <ul>
+ *   <li>{@link PenaltyEngine} — 安全港死罪累计调用 handleDeathInSafeHaven()</li>
+ *   <li>{@link BotScheduler} — 每周标签合规审计</li>
+ *   <li>{@link GroupHandler} — 群组命令（set_label/set_rules/leave_group/sync_admins）</li>
+ * </ul>
+ *
  * @since 1.0
  */
 @Service

@@ -14,9 +14,32 @@ import java.util.*;
 
 /**
  * RatingService — 评分服务。
- * 
- * 基于 Elasticsearch 存储的评分系统，覆盖用户/群组/机器人/代理四种实体，
+ *
+ * 基于 {@link ElasticsearchClient} 存储的评分系统，覆盖用户/群组/机器人/代理四种实体，
  * 包含验证码防作弊、频率限制和评分奖励。
+ *
+ * <p>核心功能：</p>
+ * <ul>
+ *   <li>1-5 星评分，ES 持久化存储（{@link RatingRecord}）</li>
+ *   <li>频率限制：同用户 60 秒内不能重复评分</li>
+ *   <li>验证码防作弊：通过 {@link CaptchaService} 验证</li>
+ *   <li>评分奖励：每次评分 +2 信用分（通过 {@link CreditEngine}）</li>
+ *   <li>评分统计：平均分、分布、总数</li>
+ * </ul>
+ *
+ * <p>依赖：</p>
+ * <ul>
+ *   <li>{@link ElasticsearchClient} — 评分数据读写</li>
+ *   <li>{@link CaptchaService} — 验证码校验</li>
+ *   <li>{@link CreditEngine} — 评分奖励加分</li>
+ *   <li>{@link ConcurrencyGuard} — ES 写入并发控制（最多 20 并发）</li>
+ * </ul>
+ *
+ * <p>被引用：</p>
+ * <ul>
+ *   <li>{@link MiniAppController} — API 层评分/统计/用户评分查询</li>
+ * </ul>
+ *
  * @since 1.0
  */
 @Service
@@ -99,7 +122,13 @@ public class RatingService {
                 saveRatingAcquired(r);
             }
 
-            creditEngine.apply(userId, 2, "reward", "评分奖励");
+            try {
+                creditEngine.apply(userId, 2, "reward", "评分奖励");
+            } catch (Exception e) {
+                // ES 已写入，但 PG 加分失败 — 不可原子回滚（跨库），打 WARN 日志留痕
+                log.warn("Rating reward credit failed (ES write succeeded, PG credit failed): userId={} err={}",
+                    userId, e.getMessage());
+            }
         } finally {
             concurrencyGuard.releaseEsWrite();
         }
@@ -161,7 +190,7 @@ public class RatingService {
                     ))
                     .size(1),
                 RatingRecord.class);
-            return resp.hits().hits().stream().map(Hit::source).findFirst().orElse(null);
+            return resp.hits().hits().stream().map(Hit::source).filter(java.util.Objects::nonNull).findFirst().orElse(null);
         } catch (Exception e) {
             log.error("getUserRating failed: {}", e.getMessage());
             return null;
@@ -176,7 +205,7 @@ public class RatingService {
                     .sort(so -> so.field(f -> f.field("createTime").order(SortOrder.Desc)))
                     .size(1),
                 RatingRecord.class);
-            var r = resp.hits().hits().stream().map(Hit::source).findFirst().orElse(null);
+            var r = resp.hits().hits().stream().map(Hit::source).filter(java.util.Objects::nonNull).findFirst().orElse(null);
             return r != null ? r.getCreateTime() : null;
         } catch (Exception e) {
             log.error("getLastRatingTime failed: {}", e.getMessage());

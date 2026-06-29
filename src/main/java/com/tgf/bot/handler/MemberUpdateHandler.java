@@ -14,6 +14,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -39,8 +40,12 @@ public class MemberUpdateHandler implements BotHandler {
     private final CaptchaService captchaService;
     private final TicketService ticketService;
 
+    @Value("${bot.creator:0}")
+    private String creatorIdsStr;
+
     public MemberUpdateHandler(UserRepository userRepo, GroupRepository groupRepo,
-                                CreditEngine creditEngine, CaptchaService captchaService, TicketService ticketService) {
+                                CreditEngine creditEngine, CaptchaService captchaService,
+                                TicketService ticketService) {
         this.userRepo = userRepo;
         this.groupRepo = groupRepo;
         this.creditEngine = creditEngine;
@@ -109,13 +114,16 @@ public class MemberUpdateHandler implements BotHandler {
             });
 
             // 通知超级管理员
-            try {
-                bot.execute(new com.pengrad.telegrambot.request.SendMessage(5006320370L,
-                    "⚠️ 机器人被从群组 " + chatId + " 踢出\n"
-                    + "群组名称: " + member.chat().title() + "\n"
-                    + "时间: " + LocalDateTime.now()));
-            } catch (Exception e) {
-                log.warn("Failed to notify admin about kick: {}", e.getMessage());
+            for (String s : creatorIdsStr.split(",")) {
+                try {
+                    long adminId = Long.parseLong(s.trim());
+                    bot.execute(new com.pengrad.telegrambot.request.SendMessage(adminId,
+                        "⚠️ 机器人被从群组 " + chatId + " 踢出\n"
+                        + "群组名称: " + member.chat().title() + "\n"
+                        + "时间: " + LocalDateTime.now()));
+                } catch (Exception e) {
+                    log.warn("Failed to notify admin {} about kick: {}", s, e.getMessage());
+                }
             }
         }
     }
@@ -165,7 +173,7 @@ public class MemberUpdateHandler implements BotHandler {
             var arith = captchaService.generateArithmetic();
             bot.execute(new com.pengrad.telegrambot.request.SendMessage(userId,
                 "🔐 请在 5 分钟内回复以下算术验证码完成验证：\n\n" + arith.question() +
-                "\n\n回复格式：/captcha_answer " + arith.captchaId() + " " + arith.expectedAnswer()));
+                "\n\n回复格式：/captcha_answer " + arith.captchaId() + " <你的答案>"));
         } catch (Exception e) {
             log.debug("Failed to send captcha: {}", e.getMessage());
         }

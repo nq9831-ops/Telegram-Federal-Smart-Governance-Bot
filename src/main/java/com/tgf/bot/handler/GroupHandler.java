@@ -31,12 +31,10 @@ public class GroupHandler implements BotHandler {
 
     private final UserRepository userRepo;
     private final GroupRepository groupRepo;
-    private final CreditEngine creditEngine;
     private final ContentModerationService moderationService;
     private final PenaltyEngine penaltyEngine;
     private final TemplateEngine templateEngine;
     private final CircuitBreakerService circuitBreaker;
-    private final ConfigService configService;
     private final GroupCircuitBreakerService groupBreaker;
     private final FederalTrustService federalTrust;
 
@@ -44,19 +42,17 @@ public class GroupHandler implements BotHandler {
     private String creatorIdsStr;
 
     public GroupHandler(UserRepository userRepo, GroupRepository groupRepo,
-                        CreditEngine creditEngine, ContentModerationService moderationService,
+                        ContentModerationService moderationService,
                         PenaltyEngine penaltyEngine, TemplateEngine templateEngine,
-                        CircuitBreakerService circuitBreaker, ConfigService configService,
+                        CircuitBreakerService circuitBreaker,
                         GroupCircuitBreakerService groupBreaker,
                         FederalTrustService federalTrust) {
         this.userRepo = userRepo;
         this.groupRepo = groupRepo;
-        this.creditEngine = creditEngine;
         this.moderationService = moderationService;
         this.penaltyEngine = penaltyEngine;
         this.templateEngine = templateEngine;
         this.circuitBreaker = circuitBreaker;
-        this.configService = configService;
         this.groupBreaker = groupBreaker;
         this.federalTrust = federalTrust;
     }
@@ -146,7 +142,11 @@ public class GroupHandler implements BotHandler {
     }
 
     private void handleLeaveGroup(TelegramBot bot, Long chatId, UserEntity user) {
-        bot.execute(new com.pengrad.telegrambot.request.LeaveChat(chatId));
+        try {
+            bot.execute(new com.pengrad.telegrambot.request.LeaveChat(chatId));
+        } catch (Exception e) {
+            log.warn("Failed to leave chat {}: {}", chatId, e.getMessage());
+        }
     }
 
     private void handleSyncAdmins(TelegramBot bot, Long chatId, UserEntity user) {
@@ -176,6 +176,10 @@ public class GroupHandler implements BotHandler {
             case RESTRICT_USER:
                 // 用户级熔断 — 跳过该用户的消息处理
                 log.warn("User {} circuit broken, message dropped", user.getUserId());
+                return;
+            case MUTE:
+                // 群组全员禁言模式 — 跳过处理
+                log.info("Group {} muted, message skipped", chatId);
                 return;
             case PASS:
                 // 正常处理
@@ -224,7 +228,7 @@ public class GroupHandler implements BotHandler {
             circuitBreaker.recordDeepSeekSuccess();
 
             if (result != null && result.isViolation()) {
-                log.info("AI审核 [{}] ({:.2f}): user={} group={}",
+                log.info("AI审核 [{}] ({}): user={} group={}",
                     result.getCategory(), result.getConfidence(), user.getUserId(), chatId);
 
                 // 白名单用户：仅死刑类违规处罚，其他放行
@@ -245,30 +249,35 @@ public class GroupHandler implements BotHandler {
         }
     }
 
-    /** 处理处罚结果：撤回消息 + 禁言 + 私聊通知。 */
+    /** 处理处罚结果：先禁言（确保处罚执行），再撤回消息 + 私聊通知。 */
     private void handlePenaltyResult(TelegramBot bot, Long chatId, UserEntity user, Message msg, PenaltyEngine.PenaltyResult penalty) {
         if (!penalty.penalized()) return;
 
-        // 撤回消息
-        try {
-            bot.execute(new com.pengrad.telegrambot.request.DeleteMessage(chatId, msg.messageId()));
-        } catch (Exception e) {
-            log.warn("Failed to delete message: {}", e.getMessage());
-        }
-
-        // 禁言
+        // 1. 先禁言（确保处罚落地）
+        //    如果禁言失败，消息不撤回（最大化保留证据）
+        boolean muteApplied = false;
         if (federalTrust.shouldMute(user.getUserId())) {
             try {
                 var permissions = new com.pengrad.telegrambot.model.ChatPermissions()
                     .canSendMessages(false);
                 bot.execute(new com.pengrad.telegrambot.request.RestrictChatMember(chatId, user.getUserId(), permissions));
+                muteApplied = true;
                 log.info("Global mute applied: user={}", user.getUserId());
             } catch (Exception e) {
                 log.warn("Failed to restrict chat member {}: {}", user.getUserId(), e.getMessage());
             }
         }
 
-        // 私聊通知处罚（规格书9.4）
+        // 2. 撤回违规消息（只要触发了处罚就撤回，无论禁言是否成功）
+        if (penalty.penalized()) {
+            try {
+                bot.execute(new com.pengrad.telegrambot.request.DeleteMessage(chatId, msg.messageId()));
+            } catch (Exception e) {
+                log.warn("Failed to delete message: {}", e.getMessage());
+            }
+        }
+
+        // 3. 私聊通知处罚（规格书9.4）
         try {
             String notify = "⚠️ 你有一条处罚通知\n\n"
                 + "群组: " + chatId + "\n"
@@ -281,7 +290,7 @@ public class GroupHandler implements BotHandler {
             log.warn("Failed to send penalty notification: {}", e.getMessage());
         }
 
-        // 通知多级熔断引擎（仅实际触发了处罚才记录违规）
+        // 4. 通知多级熔断引擎（仅实际触发了处罚才记录违规）
         groupBreaker.recordViolation(chatId, user.getUserId());
     }
 
@@ -325,7 +334,13 @@ public class GroupHandler implements BotHandler {
         u.setUsername(from.username() != null ? from.username() : "");
         u.setCreditScore(100);
         u.setLang(from.languageCode() != null ? from.languageCode() : "zh");
-        return userRepo.save(u);
+        try {
+            return userRepo.save(u);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            log.debug("Concurrent user registration detected for userId={}, retrying", id);
+            return userRepo.findById(id).orElseThrow(() ->
+                new RuntimeException("Failed to register user " + id + ", please try again"));
+        }
     }
 
     private void ensureGroup(Long chatId, String title, String username) {
@@ -495,8 +510,15 @@ public class GroupHandler implements BotHandler {
 
     /** 检查是否是超级管理员 */
     private boolean isSuperAdmin(long userId) {
+        if (creatorIdsStr == null || creatorIdsStr.isBlank()) return false;
         for (String s : creatorIdsStr.split(",")) {
-            if (Long.parseLong(s.trim()) == userId) return true;
+            String trimmed = s.trim();
+            if (trimmed.isEmpty()) continue;
+            try {
+                if (Long.parseLong(trimmed) == userId) return true;
+            } catch (NumberFormatException e) {
+                log.warn("Invalid admin ID in config: {}", trimmed);
+            }
         }
         return false;
     }

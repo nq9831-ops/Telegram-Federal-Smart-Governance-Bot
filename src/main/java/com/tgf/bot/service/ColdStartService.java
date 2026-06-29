@@ -15,9 +15,33 @@ import java.time.LocalDateTime;
 
 /**
  * ColdStartService — 冷启动保护服务。
- * 
+ *
  * 系统上线前指定天数为冷启动期，所有自动化处罚转为人工确认工单，
  * 冷启动期结束后自动追扣 pending 处罚。
+ *
+ * <p>设计模式："立即扣分 + 事后复核"（而非"暂不扣分 + 待确认"）。</p>
+ * <ul>
+ *   <li>冷启动期内：处罚立即执行 + 生成人工复核工单</li>
+ *   <li>审核官通过：处罚生效（已扣分）</li>
+ *   <li>审核官驳回：通过 {@link CreditEngine} 加回分数（补偿逻辑）</li>
+ *   <li>冷启动期结束：所有未处理工单自动通过</li>
+ * </ul>
+ *
+ * <p>依赖：</p>
+ * <ul>
+ *   <li>{@link UserRepository} — 用户数据查询</li>
+ *   <li>{@link CreditEngine} — 执行扣分</li>
+ *   <li>{@link FederalTrustService} — 全局禁言判断</li>
+ *   <li>{@link TicketEntity} — 处罚工单</li>
+ * </ul>
+ *
+ * <p>被引用：</p>
+ * <ul>
+ *   <li>{@link GroupHandler} — 冷启动期消息审核</li>
+ *   <li>{@link MiniAppController} — API 层冷启动状态查询</li>
+ *   <li>{@link BotScheduler} — 冷启动期结束检查</li>
+ * </ul>
+ *
  * @since 1.0
  */
 @Service
@@ -63,11 +87,15 @@ public class ColdStartService {
         this.systemLaunchTime = time;
     }
 
-    /** 冷启动期处罚-生成待确认工单 */
+    /**
+     * 冷启动期处罚-立即执行扣分 + 生成人工复核工单。
+     * 注意：当前设计是"立即扣分+事后复核"而非"暂不扣分+待确认"。
+     * 审核官 reject 时应通过 CreditEngine 加回分数（补偿逻辑）。
+     */
     @Transactional
     public TicketEntity handlePenaltyInColdStart(long userId, String category, double confidence,
                                                   String reason, Long groupId, String messageText) {
-        // 生成信用分记录（pending状态）
+        // 立即扣分（事后复核模式），审核官 reject 时需回滚
         UserEntity user = userRepo.findById(userId).orElse(null);
         if (user != null) {
             int penalty = switch (category) {

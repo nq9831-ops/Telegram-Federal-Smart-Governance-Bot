@@ -5,7 +5,6 @@ import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 
@@ -25,12 +24,13 @@ public class DistributedLockService {
 
     /**
      * 尝试获取基于 PostgreSQL advisory lock 的分布式锁（非阻塞）。
-     * 锁在事务提交/回滚时自动释放。
-     * 使用双参数 (key1, key2) 形式，大幅降低哈希冲突概率。
+     * <p>锁在调用方事务提交/回滚时自动释放。不要在此方法上加 @Transactional，
+     * 否则锁会在方法返回时立即释放，导致分布式互斥失效。</p>
+     * <p>使用双参数 (key1, key2) 形式，大幅降低哈希冲突概率。</p>
      * @param lockKey 锁标识（唯一）
+     * @param timeoutMs 保留参数（当前未使用）
      * @return true 获取成功，false 获取失败
      */
-    @Transactional
     public boolean tryLock(String lockKey, long timeoutMs) {
         int[] keys = hashToIntPair(lockKey);
         try {
@@ -47,8 +47,8 @@ public class DistributedLockService {
 
     /**
      * 释放 advisory lock（通常在同一事务结束时自动释放，此方法用于手动提前释放）。
+     * <p>不要在此方法上加 @Transactional，否则会在独立事务中释放锁。</p>
      */
-    @Transactional
     public void unlock(String lockKey) {
         int[] keys = hashToIntPair(lockKey);
         try {

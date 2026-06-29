@@ -38,12 +38,10 @@ public class BotScheduler {
 
     private final UserRepository userRepo;
     private final CreditEngine creditEngine;
-    private final RankingEngine rankingEngine;
     private final ContentModerationService moderationService;
     private final CircuitBreakerService circuitBreaker;
-    private final TicketService ticketService;
-    private final CaptchaService captchaService;
     private final GroupCircuitBreakerService groupBreaker;
+    private final TemplateEngine templateEngine;
     private final DistributedLockService distributedLock;
 
     @Value("${credit.daily-auto-increment:1}")
@@ -68,19 +66,17 @@ public class BotScheduler {
     private int bottom615Penalty;
 
     public BotScheduler(UserRepository userRepo, CreditEngine creditEngine,
-                        RankingEngine rankingEngine, ContentModerationService moderationService,
-                        CircuitBreakerService circuitBreaker, TicketService ticketService,
-                        CaptchaService captchaService,
+                        ContentModerationService moderationService,
+                        CircuitBreakerService circuitBreaker,
                         GroupCircuitBreakerService groupBreaker,
+                        TemplateEngine templateEngine,
                         DistributedLockService distributedLock) {
         this.userRepo = userRepo;
         this.creditEngine = creditEngine;
-        this.rankingEngine = rankingEngine;
         this.moderationService = moderationService;
         this.circuitBreaker = circuitBreaker;
-        this.ticketService = ticketService;
-        this.captchaService = captchaService;
         this.groupBreaker = groupBreaker;
+        this.templateEngine = templateEngine;
         this.distributedLock = distributedLock;
     }
 
@@ -138,9 +134,9 @@ public class BotScheduler {
             LocalDateTime todayStart = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0);
 
             // 每个用户最多分析20条消息；每次最多200人，防止打爆API
-            // TODO: 用户量增长后可改为分页或有状态分批处理
+            // 注意：当前为简单分页，用户量增长后需改为有状态分批处理
             List<Long> activeUserIds = em.createQuery(
-                "SELECT m.userId FROM MessageEntity m WHERE m.messageTime >= :today " +
+                "SELECT m.userId FROM MessageEntity m WHERE m.createdAt >= :today " +
                 "GROUP BY m.userId HAVING COUNT(m) >= 10")
                 .setParameter("today", todayStart)
                 .setMaxResults(200)
@@ -151,8 +147,9 @@ public class BotScheduler {
             for (Long uid : activeUserIds) {
                 try {
                     List<String> recentMessages = em.createQuery(
-                        "SELECT m.text FROM MessageEntity m WHERE m.userId = :uid ORDER BY m.messageTime DESC")
+                        "SELECT m.text FROM MessageEntity m WHERE m.userId = :uid AND m.createdAt >= :weekAgo ORDER BY m.createdAt DESC")
                         .setParameter("uid", uid)
+                        .setParameter("weekAgo", LocalDateTime.now().minusDays(7))
                         .setMaxResults(20)
                         .getResultList();
 
@@ -184,7 +181,8 @@ public class BotScheduler {
 
             int normal = em.createQuery(
                 "UPDATE UserEntity u SET u.creditScore = LEAST(u.creditScore + :inc, :max) " +
-                "WHERE u.creditScore < :max AND u.creditScore > 0 AND u.frozen = false " +
+                "WHERE u.creditScore < :max AND u.creditScore > 0 " +
+                "AND (u.frozen = false OR (u.frozenUntil IS NOT NULL AND u.frozenUntil < CURRENT_TIMESTAMP)) " +
                 "AND (u.createdAt IS NULL OR u.createdAt <= :ageThreshold)")
                 .setParameter("inc", dailyAutoIncrement)
                 .setParameter("max", maxScore)
@@ -197,7 +195,7 @@ public class BotScheduler {
         }
     }
 
-    /** 每周一 00:00 — 排行榜结算 */
+    /** 每周一 00:00 — 排行榜结算（分页，每次最多处理 5000 人） */
     @Transactional
     @Scheduled(cron = "0 0 0 * * MON", zone = "Asia/Shanghai")
     public void weeklyRankingSettlement() {
@@ -214,34 +212,54 @@ public class BotScheduler {
                 return;
             }
 
-            List<Long> userIds = em.createQuery(
-                "SELECT u.userId FROM UserEntity u ORDER BY u.creditScore DESC", Long.class)
-                .getResultList();
+            int pageSize = 2000;
+            int offset = 0;
+            int processed = 0;
+            boolean hasMore = true;
 
-            for (int i = 0; i < userIds.size(); i++) {
-                double pct = (double) i / total * 100;
-                long uid = userIds.get(i);
-                int reward = 0;
+            while (hasMore) {
+                List<Long> userIds = em.createQuery(
+                    "SELECT u.userId FROM UserEntity u ORDER BY u.creditScore DESC", Long.class)
+                    .setFirstResult(offset)
+                    .setMaxResults(pageSize)
+                    .getResultList();
 
-                if (pct < 1) {
-                    reward = top1Reward;
-                } else if (pct < 5) {
-                    reward = top25Reward;
-                } else if (pct < 15) {
-                    reward = top615Reward;
-                } else if (pct >= 85 && pct < 95) {
-                    reward = bottom615Penalty;
-                } else if (pct >= 95) {
-                    reward = bottom5Penalty;
+                if (userIds.isEmpty()) {
+                    hasMore = false;
+                    break;
                 }
 
-                if (reward != 0) {
-                    creditEngine.apply(uid, Math.abs(reward),
-                        reward > 0 ? "ranking" : "ranking_penalty", "排行榜结算");
+                for (int i = 0; i < userIds.size(); i++) {
+                    int rankPos = offset + i;
+                    double pct = (double) rankPos / total * 100;
+                    long uid = userIds.get(i);
+                    int reward = 0;
+
+                    if (pct < 1) {
+                        reward = top1Reward;
+                    } else if (pct < 5) {
+                        reward = top25Reward;
+                    } else if (pct <= 15) {
+                        reward = top615Reward;
+                    } else if (pct >= 85 && pct < 95) {
+                        reward = bottom615Penalty;
+                    } else if (pct >= 95) {
+                        reward = bottom5Penalty;
+                    }
+
+                    if (reward != 0) {
+                        creditEngine.apply(uid, reward,
+                            reward > 0 ? "ranking" : "ranking_penalty", "排行榜结算");
+                    }
                 }
+
+                processed += userIds.size();
+                offset += pageSize;
+                em.flush();
+                em.clear();
             }
 
-            log.info("Weekly ranking settlement completed: {} users processed", userIds.size());
+            log.info("Weekly ranking settlement completed: {} users processed", processed);
         } finally {
             distributedLock.unlock("scheduler:weeklyRankingSettlement");
         }
@@ -258,15 +276,28 @@ public class BotScheduler {
         try {
             log.info("Starting weekly label compliance audit...");
 
-            List<GroupEntity> labeledGroups = em.createQuery(
-                "FROM GroupEntity g WHERE g.groupLabel IN ('NSFW', 'GAMBLING') AND g.isActive = true",
-                GroupEntity.class)
-                .getResultList();
+            int pageSize = 500;
+            int page = 0;
+            int totalChecked = 0;
+            boolean hasMore = true;
 
-            for (GroupEntity g : labeledGroups) {
+            while (hasMore) {
+                List<GroupEntity> labeledGroups = em.createQuery(
+                    "FROM GroupEntity g WHERE g.groupLabel IN ('NSFW', 'GAMBLING') AND g.isActive = true",
+                    GroupEntity.class)
+                    .setFirstResult(page * pageSize)
+                    .setMaxResults(pageSize)
+                    .getResultList();
+
+                if (labeledGroups.isEmpty()) {
+                    hasMore = false;
+                    break;
+                }
+
+                for (GroupEntity g : labeledGroups) {
                 try {
                     List<MessageEntity> samples = em.createQuery(
-                        "FROM MessageEntity m WHERE m.chatId = :gid ORDER BY m.messageTime DESC",
+                        "FROM MessageEntity m WHERE m.groupId = :gid ORDER BY m.createdAt DESC",
                         MessageEntity.class)
                         .setParameter("gid", g.getGroupId())
                         .setMaxResults(50)
@@ -311,9 +342,25 @@ public class BotScheduler {
                 }
             }
 
-            log.info("Label audit completed: {} groups audited", labeledGroups.size());
+                em.flush();
+                em.clear();
+                page++;
+                totalChecked += labeledGroups.size();
+            }
+
+            log.info("Weekly label compliance audit completed: {} labeled groups checked", totalChecked);
         } finally {
             distributedLock.unlock("scheduler:weeklyLabelAudit");
+        }
+    }
+
+    /** 每 10 分钟 — 刷新违规模板缓存 */
+    @Scheduled(fixedRate = 600000)
+    public void refreshTemplateCache() {
+        try {
+            templateEngine.refreshCache();
+        } catch (Exception e) {
+            log.warn("Template cache refresh failed: {}", e.getMessage());
         }
     }
 

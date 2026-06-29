@@ -14,8 +14,39 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * CaptchaService — 验证码服务。
- * 
- * 基于 Kaptcha 生成图形验证码，存储到 Redis 并支持校验。
+ *
+ * 基于 {@link DefaultKaptcha}（Kaptcha 库）生成图形验证码和算术验证码，
+ * 存储到 {@link StringRedisTemplate} 并支持校验。
+ *
+ * <p>验证码类型：</p>
+ * <ul>
+ *   <li>图形验证码 — 5 位字符（去掉易混淆字符 0/O/1/l/I），5 分钟过期</li>
+ *   <li>算术验证码 — 两位数加减法，5 分钟过期（入群验证用）</li>
+ * </ul>
+ *
+ * <p>防 OCR 措施：</p>
+ * <ul>
+ *   <li>FishEyeGimpy 鱼眼变形</li>
+ *   <li>DefaultNoise 噪点干扰</li>
+ *   <li>多种字体混合（Arial/Courier/Georgia/Verdana）</li>
+ *   <li>浅灰色渐变背景</li>
+ * </ul>
+ *
+ * <p>依赖：</p>
+ * <ul>
+ *   <li>{@link StringRedisTemplate} — 验证码存储和校验</li>
+ *   <li>{@link DefaultKaptcha} — 图形验证码生成</li>
+ * </ul>
+ *
+ * <p>被引用：</p>
+ * <ul>
+ *   <li>{@link RatingService} — 评分时验证码校验</li>
+ *   <li>{@link SubmissionService} — 提交收录时验证码校验</li>
+ *   <li>{@link MiniAppController} — API 层获取验证码</li>
+ *   <li>{@link MemberUpdateHandler} — 入群算术验证码</li>
+ *   <li>{@link PrivateHandler} — 私聊获取验证码</li>
+ * </ul>
+ *
  * @since 1.0
  */
 @Service

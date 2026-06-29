@@ -14,9 +14,43 @@ import java.time.LocalDateTime;
 
 /**
  * CreditEngine — 信用分引擎。
- * 
+ *
  * 整个系统的核心信用分管理组件，所有处罚/奖励/冻结/等级判定统一入口，
  * 自动生成审计日志并联动联邦信任机制。
+ *
+ * <p>核心职责：</p>
+ * <ul>
+ *   <li>信用分增减（0-100 分制，含上下限保护）</li>
+ *   <li>信用等级判定（钻石/黄金/白银/青铜/受限）</li>
+ *   <li>用户冻结/解冻（临时封禁特权）</li>
+ *   <li>每日自动加分（活跃用户恢复机制）</li>
+ *   <li>信用分异动告警（±30 分自动生成工单）</li>
+ *   <li>死刑执行（信用分清零，永久拉黑）</li>
+ * </ul>
+ *
+ * <p>依赖：</p>
+ * <ul>
+ *   <li>{@link UserRepository} — 用户数据持久化</li>
+ *   <li>{@link TicketService} — 异动告警工单生成</li>
+ *   <li>{@link FederalTrustService} — 黑产防刷：加分折扣/全局禁言阈值</li>
+ *   <li>{@link AggregatedNotifier} — 异动通知推送到管理员</li>
+ *   <li>{@link AuditLogEntity} — 审计日志记录</li>
+ * </ul>
+ *
+ * <p>被引用：</p>
+ * <ul>
+ *   <li>{@link PenaltyEngine} — 处罚扣分/死刑执行</li>
+ *   <li>{@link GroupHandler} — 群组命令中的信用分查询</li>
+ *   <li>{@link AdminHandler} — 管理员封禁/解封/冻结</li>
+ *   <li>{@link InviteHandler} — 邀请奖励加分</li>
+ *   <li>{@link RatingService} — 评分奖励加分</li>
+ *   <li>{@link BotScheduler} — 每日自动加分/排行榜结算</li>
+ *   <li>{@link ColdStartService} — 冷启动期处罚</li>
+ *   <li>{@link GroupManagementService} — 标签违规连带扣分</li>
+ *   <li>{@link MemberUpdateHandler} — 入群验证失败扣分</li>
+ *   <li>{@link MiniAppController} — API 层信用分查询</li>
+ * </ul>
+ *
  * @since 1.0
  */
 @Service

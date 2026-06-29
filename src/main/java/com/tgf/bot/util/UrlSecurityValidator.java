@@ -6,7 +6,7 @@ import org.slf4j.LoggerFactory;
 import java.net.InetAddress;
 import java.net.URI;
 import java.util.Set;
-import java.util.regex.Pattern;
+import java.util.concurrent.*;
 
 /**
  * UrlSecurityValidator — URL 安全校验工具。
@@ -22,8 +22,28 @@ import java.util.regex.Pattern;
 public class UrlSecurityValidator {
 
     private static final Logger log = LoggerFactory.getLogger(UrlSecurityValidator.class);
-    private static final Pattern T_ME_PATTERN = Pattern.compile("^https?://t\\.me/[a-zA-Z0-9_/+?-]+$");
     private static final Set<String> ALLOWED_PROTOCOLS = Set.of("http", "https", "tg");
+    private static final ExecutorService DNS_EXECUTOR = Executors.newFixedThreadPool(2, r -> {
+        Thread t = new Thread(r, "url-dns-checker");
+        t.setDaemon(true);
+        return t;
+    });
+    private static final long DNS_TIMEOUT_MS = 3000;
+
+    static {
+        // JVM 关闭时优雅关闭线程池（daemon 线程在 JVM 退出时自动终止，但热重载场景需要显式关闭）
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            DNS_EXECUTOR.shutdown();
+            try {
+                if (!DNS_EXECUTOR.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                    DNS_EXECUTOR.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                DNS_EXECUTOR.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }, "url-dns-checker-shutdown"));
+    }
 
     /**
      * 校验URL安全性。
@@ -49,37 +69,42 @@ public class UrlSecurityValidator {
             String host = uri.getHost();
             if (host == null) return "无效链接：缺少主机名";
 
-            host = host.toLowerCase();
+            final String normalizedHost = host.toLowerCase();
 
             // 禁止 localhost
-            if ("localhost".equals(host) || "127.0.0.1".equals(host) || "[::1]".equals(host)) {
+            if ("localhost".equals(normalizedHost) || "127.0.0.1".equals(normalizedHost) || "[::1]".equals(normalizedHost)) {
                 return "禁止提交本地地址链接";
             }
 
             // 检查是否为 IP 格式的内网地址
-            if (isIpFormat(host) && isPrivateIpString(host)) {
+            if (isIpFormat(normalizedHost) && isPrivateIpString(normalizedHost)) {
                 return "禁止提交内网地址链接";
             }
 
             // DNS 解析校验：防止域名解析到内网地址（DNS 重绑定防护）
-            if (!isIpFormat(host)) {
+            // 使用独立线程 + 超时，防止 DNS 阻塞请求处理
+            if (!isIpFormat(normalizedHost)) {
                 try {
-                    InetAddress[] addresses = InetAddress.getAllByName(host);
+                    final String dnsHost = normalizedHost;
+                    Future<InetAddress[]> future = DNS_EXECUTOR.submit(() -> InetAddress.getAllByName(dnsHost));
+                    InetAddress[] addresses = future.get(DNS_TIMEOUT_MS, TimeUnit.MILLISECONDS);
                     for (InetAddress addr : addresses) {
                         if (isPrivateInetAddress(addr)) {
-                            log.warn("Blocked URL resolving to private IP: {} -> {}", host, addr.getHostAddress());
+                            log.warn("Blocked URL resolving to private IP: {} -> {}", normalizedHost, addr.getHostAddress());
                             return "禁止提交解析到内网地址的链接";
                         }
                     }
+                } catch (TimeoutException e) {
+                    log.warn("DNS resolution timeout for host: {} ({}ms)", normalizedHost, DNS_TIMEOUT_MS);
+                    return "链接域名解析超时";
                 } catch (Exception e) {
-                    log.debug("DNS resolution failed for host: {}", host);
-                    // DNS 解析失败时，保守起见拒绝（可根据业务调整）
+                    log.debug("DNS resolution failed for host: {}", normalizedHost);
                     return "链接域名解析失败";
                 }
             }
 
             // 基本格式校验
-            if (host.length() < 3) return "链接域名无效";
+            if (normalizedHost.length() < 3) return "链接域名无效";
 
             return null;
         } catch (Exception e) {

@@ -14,9 +14,28 @@ import java.util.*;
 
 /**
  * FalsePositiveService — 误报反馈闭环服务。
- * 
- * 审核官反馈 DeepSeek 误判/漏判，生成周报与优化建议，
- * 持续改进 AI 判定准确率。
+ *
+ * 审核官反馈 {@link ContentModerationService} 的 DeepSeek 误判/漏判，
+ * 生成周报与优化建议，持续改进 AI 判定准确率。
+ *
+ * <p>核心功能：</p>
+ * <ul>
+ *   <li>提交误报反馈 — 记录误报类型、原始文本、AI 判定结果</li>
+ *   <li>生成周报 — 统计误报分布、高频误报警告、关键词分析</li>
+ *   <li>趋势报告 — 近 4 周误报率趋势</li>
+ * </ul>
+ *
+ * <p>依赖：</p>
+ * <ul>
+ *   <li>{@link EntityManager} — JPA 数据持久化</li>
+ *   <li>{@link FalsePositiveFeedbackEntity} — 误报反馈实体</li>
+ * </ul>
+ *
+ * <p>被引用：</p>
+ * <ul>
+ *   <li>{@link ReviewHandler} — 审核官提交误报反馈</li>
+ * </ul>
+ *
  * @since 1.0
  */
 @Service

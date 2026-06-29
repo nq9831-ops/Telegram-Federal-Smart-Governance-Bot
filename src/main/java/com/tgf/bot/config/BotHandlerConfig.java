@@ -1,6 +1,5 @@
 package com.tgf.bot.config;
 
-import com.pengrad.telegrambot.TelegramBot;
 import com.tgf.bot.handler.BotHandler;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -19,11 +18,9 @@ public class BotHandlerConfig {
 
     private static final Logger log = LoggerFactory.getLogger(BotHandlerConfig.class);
 
-    private final TelegramBot bot;
     private final List<BotHandler> handlers;
 
-    public BotHandlerConfig(TelegramBot bot, List<BotHandler> handlers) {
-        this.bot = bot;
+    public BotHandlerConfig(List<BotHandler> handlers) {
         this.handlers = handlers;
     }
 

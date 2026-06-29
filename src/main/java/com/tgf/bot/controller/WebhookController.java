@@ -10,7 +10,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.Semaphore;
 
@@ -26,8 +25,6 @@ import java.util.concurrent.Semaphore;
 public class WebhookController {
 
     private static final Logger log = LoggerFactory.getLogger(WebhookController.class);
-
-    private static final Duration UPDATE_TIMEOUT = Duration.ofSeconds(30);
 
     private static final com.fasterxml.jackson.databind.ObjectMapper OBJECT_MAPPER = 
         new com.fasterxml.jackson.databind.ObjectMapper();
@@ -70,6 +67,7 @@ public class WebhookController {
             return ResponseEntity.status(429).body("Too Many Requests");
         }
 
+        boolean asyncStarted = false;
         try {
             var update = OBJECT_MAPPER.readValue(body, Update.class);
 
@@ -81,10 +79,15 @@ public class WebhookController {
                     updateSemaphore.release();
                 }
             });
+            asyncStarted = true;
 
         } catch (Exception e) {
-            updateSemaphore.release();
             log.warn("Failed to parse update: {}", e.getMessage());
+        } finally {
+            // parse 失败时（虚拟线程未启动），必须在这里释放许可，否则信号量永久泄漏
+            if (!asyncStarted) {
+                updateSemaphore.release();
+            }
         }
 
         return ResponseEntity.ok("ok");

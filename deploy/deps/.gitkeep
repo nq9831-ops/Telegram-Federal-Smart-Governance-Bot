@@ -1,0 +1,3 @@
+cd deploy/
+bash download-deps.sh   # 下载 JDK/Maven/Mihomo 等离线包到本目录
+sudo bash install.sh    # 离线安装
